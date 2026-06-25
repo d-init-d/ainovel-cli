@@ -21,7 +21,7 @@ var stylesFS embed.FS
 //go:embed rules
 var rulesFS embed.FS
 
-// Prompts 表示嵌入的提示词集合。
+// Prompts đại diện cho tập hợp các prompt được nhúng sẵn.
 type Prompts struct {
 	Coordinator      string
 	ArchitectShort   string
@@ -34,17 +34,17 @@ type Prompts struct {
 	SimulationMerge  string
 }
 
-// Bundle 表示运行所需的静态资源集合。
+// Bundle đại diện cho tập hợp tài nguyên tĩnh cần thiết khi chạy.
 type Bundle struct {
 	References tools.References
 	Prompts    Prompts
 	Styles     map[string]string
-	// RulesFS 是 assets/rules 子树（根目录直接包含 default.md）。
-	// 调用方传给 rules.Load 作为内置规则来源。
+	// RulesFS là cây con assets/rules (thư mục gốc chứa trực tiếp default.md).
+	// Người gọi truyền vào rules.Load làm nguồn quy tắc nội tuyến.
 	RulesFS fs.FS
 }
 
-// Load 返回指定风格对应的资源集合。
+// Load trả về tập hợp tài nguyên tương ứng với phong cách được chỉ định.
 func Load(style string) Bundle {
 	return Bundle{
 		References: loadReferences(style),
@@ -54,8 +54,8 @@ func Load(style string) Bundle {
 	}
 }
 
-// loadRulesFS 返回 assets/rules 的子文件系统；根目录直接包含 default.md。
-// fs.Sub 失败时（理论不应发生）返回 nil，rules.Load 据此跳过内置来源。
+// loadRulesFS trả về hệ thống tệp con của assets/rules; thư mục gốc chứa trực tiếp default.md.
+// Nếu fs.Sub thất bại (về lý thuyết không nên xảy ra) trả về nil, rules.Load sẽ bỏ qua nguồn nội tuyến.
 func loadRulesFS() fs.FS {
 	sub, err := fs.Sub(rulesFS, "rules")
 	if err != nil {
@@ -112,11 +112,11 @@ func withSimulationGuidance(prompt, role string) string {
 	return prompt + "\n\n" + strings.ReplaceAll(simulationGuidance, "{{role}}", role)
 }
 
-const simulationGuidance = `## 仿写画像
+const simulationGuidance = `## Hồ sơ phong cách mô phỏng
 
-当 novel_context 返回 simulation_profile 时，必须把它视为当前作品的仿写方向约束。{{role}} 应读取其中的 style、lexicon、plot_design、hook_design、pacing_density、reader_engagement 和 role_guidance。
+Khi novel_context trả về simulation_profile, phải coi đó là ràng buộc định hướng phong cách mô phỏng cho tác phẩm hiện tại. {{role}} cần đọc các trường style, lexicon, plot_design, hook_design, pacing_density, reader_engagement và role_guidance trong đó.
 
-使用原则：借鉴结构、节奏、钩子、信息释放和吸引读者的手法；不要复制原文句子、人物、地名、专有设定或固定桥段。若 simulation_profile 与用户显式要求冲突，优先服从用户要求。`
+Nguyên tắc sử dụng: học hỏi cấu trúc, nhịp truyện, điểm móc, cách giải phóng thông tin và kỹ thuật thu hút độc giả; không sao chép câu văn gốc, nhân vật, địa danh, thiết lập riêng hay cầu nối cố định. Nếu simulation_profile mâu thuẫn với yêu cầu tường minh của người dùng, ưu tiên tuân theo yêu cầu của người dùng.`
 
 func loadStyles() map[string]string {
 	styles := make(map[string]string)

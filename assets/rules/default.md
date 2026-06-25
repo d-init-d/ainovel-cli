@@ -1,46 +1,54 @@
 ---
-# 项目内置默认规则（Phase 1 安全版）
+# Quy tắc mặc định tích hợp sẵn của dự án (Phase 1 - phiên bản an toàn)
 #
-# 这里只放"机械可检 + 低争议"的默认约束。非机械化审美偏好（如风格倾向）
-# 当前仍由 writer.md / editor.md 承载，待 Phase 1.5（F1 手测验证
-# working_memory 约束力后）再决定是否搬入本文件。
+# Chỉ đặt ở đây các ràng buộc mặc định "có thể kiểm tra tự động + ít tranh cãi".
+# Các sở thích thẩm mỹ phi tự động (như xu hướng phong cách) hiện vẫn do
+# writer.md / editor.md đảm nhiệm; sẽ quyết định có chuyển vào file này hay không
+# sau Phase 1.5 (sau khi kiểm thử tay F1 xác nhận working_memory có hiệu lực ràng buộc).
 #
-# 用户可在 ./.ainovel/rules/ 或 ~/.ainovel/rules/ 目录（其下任意 .md）覆盖普通字段；
-# fatigue_words 按词合并，同一词由更近来源覆盖阈值。
-# 详细字段语义参见项目根 rules.md.example。
+# Người dùng có thể ghi đè các trường thông thường bằng cách đặt file .md bất kỳ
+# trong thư mục ./.ainovel/rules/ hoặc ~/.ainovel/rules/;
+# fatigue_words được hợp nhất theo từng từ, cùng một từ thì nguồn gần hơn ghi đè ngưỡng.
+# Xem chi tiết ngữ nghĩa các trường tại rules.md.example ở thư mục gốc dự án.
 
-# 章节字数范围：偏差 <20% 警告；≥20% 错误。
+# Giới hạn số từ mỗi chương: cảnh báo nếu lệch <20%; lỗi nếu lệch ≥20%.
 chapter_words: 3000-6000
 
-# 短语黑名单：出现 ≥1 次即 error。checker 做字面子串匹配，无通配符，
-# 故只放"定长固定串"的 AI 套句（低争议）；带变量的模式（如"不是X而是Y"）
-# 字面匹配抓不到，归 anti-ai-tone.md 语义层。
-# 破折号 "——" 在对话被打断时合法，有争议，不进内置默认，留给 ./.ainovel/rules/ 自配。
+# Danh sách cụm từ cấm: xuất hiện ≥1 lần là error. Bộ kiểm tra so khớp chuỗi con
+# theo nghĩa đen, không hỗ trợ wildcard, nên chỉ đặt các câu sáo rỗng AI "chuỗi cố định"
+# (ít tranh cãi); các mẫu có biến (như "không phải X mà là Y") không bắt được bằng
+# so khớp nghĩa đen — thuộc tầng ngữ nghĩa của anti-ai-tone.md.
+# Dấu gạch ngang "——" hợp lệ khi đối thoại bị ngắt, còn tranh cãi, không đưa vào
+# mặc định tích hợp, để ./.ainovel/rules/ tự cấu hình.
 forbidden_phrases:
-  - "某种程度上"
-  - "值得注意的是"
-  - "不知为何"
-  - "五味杂陈"
+  - "theo một nghĩa nào đó"
+  - "đáng chú ý là"
+  - "không hiểu tại sao"
+  - "cảm xúc lẫn lộn"
 
-# 疲劳词软限制：commit_chapter 会检查每章出现次数，超过阈值报 warning。
-# 这些是网文/小说常见过度使用的词，anti-ai-tone.md 有同方向的语义提示——双源信号一致。
-# 后六条（像一/沉默了/没有说话/X息）来自 196 章长跑产物实证：传统套话已被上面的
-# 表灭绝，但模型转而把这些"节拍词"用到章均 5-7 次；阈值放宽容忍正常使用。
+# Giới hạn mềm cho từ sáo rỗng: commit_chapter sẽ kiểm tra số lần xuất hiện mỗi chương,
+# vượt ngưỡng sẽ báo warning.
+# Đây là những từ bị lạm dụng phổ biến trong tiểu thuyết mạng/truyện dài;
+# anti-ai-tone.md cũng có gợi ý ngữ nghĩa cùng hướng — hai nguồn tín hiệu thống nhất.
+# Sáu mục cuối (như thể/im lặng/không nói gì/X nhịp thở) là kết quả thực nghiệm từ vòng lặp dài 196 chương:
+# các câu sáo rỗng truyền thống đã bị bảng trên loại bỏ, nhưng mô hình chuyển sang dùng
+# các "từ nhịp truyện" này với tần suất trung bình 5-7 lần mỗi chương; ngưỡng được nới lỏng
+# để cho phép sử dụng bình thường.
 fatigue_words:
-  不禁: 1
-  竟然: 1
-  仿佛: 2
-  此外: 1
-  然而: 2
-  一丝: 2
-  一抹: 2
-  一缕: 2
-  宛如: 1
-  不由得: 1
-  像一: 3
-  沉默了: 2
-  没有说话: 2
-  几息: 3
-  一息: 3
-  数息: 2
+  không khỏi: 1
+  bỗng nhiên: 1
+  dường như: 2
+  ngoài ra: 1
+  tuy nhiên: 2
+  một chút: 2
+  một vệt: 2
+  một sợi: 2
+  tựa như: 1
+  không thể không: 1
+  như thể: 3
+  im lặng: 2
+  không nói gì: 2
+  vài nhịp thở: 3
+  một nhịp thở: 3
+  mấy nhịp thở: 2
 ---

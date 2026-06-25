@@ -1,91 +1,93 @@
 ---
-# ── 最简用法 ───────────────────────────────────────────────
-# 本文件展示「全部」可配项，但你不必全用。只想写偏好？
-# 删掉这整段 front matter（--- 之间的内容），直接写下面的 markdown 正文
-# （# 角色 / # 风格 …）即可，零格式、零 YAML，editor 会按语义审阅。
-# 下面的结构化字段是「可选高级层」——要「字数 / 禁词」的硬性确定检查时才用。
+# ── Cách dùng tối giản ──────────────────────────────────────
+# File này trình bày «toàn bộ» các tuỳ chọn có thể cấu hình, nhưng bạn không cần dùng hết.
+# Chỉ muốn ghi sở thích? Xoá toàn bộ phần front matter (nội dung giữa hai dấu ---),
+# rồi viết thẳng phần markdown bên dưới (# Nhân vật / # Phong cách …) là được —
+# không cần định dạng, không cần YAML; biên tập viên sẽ đọc theo ngữ nghĩa.
+# Các trường có cấu trúc bên dưới là «lớp nâng cao tuỳ chọn» —
+# chỉ dùng khi cần kiểm tra cứng về «số từ / cụm từ cấm».
 # ───────────────────────────────────────────────────────────
 
-# 题材标签：当前作为字符串透传到 working_memory.user_rules.structured.genre，
-# 供 LLM 在偏好语义判断时参考。题材规则库（assets/rules/genres/）暂未开放，
-# 未来真要按题材机械加载内置文件时再恢复二阶段 loader。
+# Nhãn thể loại: hiện được truyền thẳng dưới dạng chuỗi vào working_memory.user_rules.structured.genre,
+# để LLM tham khảo khi phán đoán ngữ nghĩa sở thích. Thư viện quy tắc thể loại (assets/rules/genres/)
+# chưa mở; khi nào cần tải file nội trang theo thể loại một cách máy móc thì mới khôi phục loader hai giai đoạn.
 genre: xianxia
 
-# 章节字数范围（min-max）。偏差 < 20% 报 warning；≥ 20% 报 error。
+# Số từ mỗi chương (min-max). Lệch < 20% báo warning; ≥ 20% báo error.
 chapter_words: 3000-6000
 
-# 字符/符号黑名单。出现 ≥ 1 次即 error。
-# 注意：中文双破折号是两个 em-dash 字符；写 "——" 匹配双个，写 "—" 匹配单个。
+# Danh sách đen ký tự/ký hiệu. Xuất hiện ≥ 1 lần là error.
+# Lưu ý: dấu gạch ngang kép tiếng Trung là hai ký tự em-dash; viết "——" để khớp cặp đôi, "—" để khớp đơn.
 forbidden_chars:
   - "——"
 
-# 短语黑名单。出现 ≥ 1 次即 error。checker 做字面子串匹配，无通配符：
-# 只填"定长固定串"；带变量的模式（如"不是X而是Y"）字面匹配抓不到，
-# 应写到下面 markdown 正文，交 editor 语义判断。
+# Danh sách đen cụm từ cấm. Xuất hiện ≥ 1 lần là error. Checker so khớp chuỗi con theo nghĩa đen, không có ký tự đại diện:
+# chỉ điền "chuỗi cố định có độ dài xác định"; các mẫu có biến (ví dụ "không phải X mà là Y") không thể bắt bằng khớp chuỗi đen,
+# nên viết vào phần markdown bên dưới để biên tập viên phán đoán theo ngữ nghĩa.
 forbidden_phrases:
   - "某种程度上"
   - "值得注意的是"
 
-# 疲劳词阈值：本章超过 N 次才 warning（不跨章累计）。
-# 同时支持 list 形式：- 不禁  - 竟然  ← 默认阈值 1
+# Ngưỡng từ sáo rỗng: chỉ báo warning khi vượt quá N lần trong chương (không cộng dồn qua các chương).
+# Cũng hỗ trợ dạng danh sách: - 不禁  - 竟然  ← ngưỡng mặc định là 1
 fatigue_words:
   不禁: 1
   竟然: 1
   仿佛: 2
 ---
 
-# 风格
+# Phong cách
 
-- 严禁破折号代替逗号；对话被打断的情况可保留。
-- 避免分析报告式表达（"核心矛盾在于……"），改用人物动作与对白。
-- 尽量多用身体感知（胃部痉挛、指节发白）替代情绪标签（紧张、愤怒）。
+- Nghiêm cấm dùng dấu gạch ngang thay dấu phẩy; trường hợp hội thoại bị ngắt giữa chừng có thể giữ lại.
+- Tránh cách diễn đạt kiểu báo cáo phân tích ("mâu thuẫn cốt lõi nằm ở…"), thay bằng hành động nhân vật và đối thoại.
+- Ưu tiên dùng cảm giác cơ thể (dạ dày co thắt, đốt ngón tay trắng bệch) thay cho nhãn cảm xúc (lo lắng, tức giận).
 
-# 角色
+# Nhân vật
 
-- 主角"林尘"：性格冷静克制，外冷内热；不要写成傲娇也不要写成圣母。
-- 配角"师妹"：对主角有未明说的好感但克制；说话偏简短，不喋喋不休。
+- Nhân vật chính "Lâm Trần": tính cách điềm tĩnh, kiềm chế, lạnh ngoài nóng trong; không được viết thành kiểu tsundere cũng không thành kiểu thánh mẫu.
+- Nhân vật phụ "Sư muội": có tình cảm chưa nói ra với nhân vật chính nhưng kìm nén; nói chuyện ngắn gọn, không lải nhải.
 
-# 设定
+# Cài đặt thế giới
 
-- 修炼境界：练气 → 筑基 → 金丹 → 元婴 → 化神，每境九层。
-- 灵根分五行，主角是混沌灵根（极罕见）。
+- Cảnh giới tu luyện: Luyện Khí → Trúc Cơ → Kim Đan → Nguyên Anh → Hóa Thần, mỗi cảnh chín tầng.
+- Linh căn chia theo ngũ hành, nhân vật chính sở hữu Hỗn Độn Linh Căn (cực kỳ hiếm).
 
-# 偏好正文的语义提示
+# Gợi ý ngữ nghĩa ưu tiên phần thân bài
 
-Markdown 正文里的偏好由 editor 在审阅时语义判断，没有严格度字段：
+Các sở thích trong phần thân Markdown được biên tập viên phán đoán theo ngữ nghĩa khi xét duyệt, không có trường mức độ nghiêm ngặt:
 
-- **严禁/不准/绝不** — editor 倾向把违反者归 critical，触发 rewrite
-- **避免/不要** — editor 倾向 error/warning
-- **尽量/最好** — editor 仅作为参考偏好，不强制
+- **Nghiêm cấm/Không được/Tuyệt đối không** — biên tập viên có xu hướng xếp vi phạm vào mức critical, kích hoạt rewrite
+- **Tránh/Không nên** — biên tập viên có xu hướng báo error/warning
+- **Cố gắng/Tốt nhất là** — biên tập viên chỉ tham khảo như sở thích, không bắt buộc
 
-机械规则（front matter）由 commit_chapter 强制检查并返 rule_violations；
-自然语言规则（这段 Markdown）由 editor LLM 判断并映射到现有七维评审。
+Quy tắc máy móc (front matter) được commit_chapter kiểm tra bắt buộc và trả về rule_violations;
+quy tắc ngôn ngữ tự nhiên (phần Markdown này) do editor LLM phán đoán và ánh xạ vào bảy chiều xét duyệt hiện có.
 
-# 使用说明
+# Hướng dẫn sử dụng
 
-把本文件复制进项目级规则目录 `./.ainovel/rules/` 即生效（该目录镜像全局 `~/.ainovel/rules/`，同样放任意 `.md`）：
+Sao chép file này vào thư mục quy tắc cấp dự án `./.ainovel/rules/` là có hiệu lực (thư mục này phản chiếu thư mục toàn cục `~/.ainovel/rules/`, cũng đặt file `.md` tuỳ ý):
 
 ```bash
 mkdir -p .ainovel/rules
 cp rules.md.example .ainovel/rules/my-rules.md
-# 编辑 .ainovel/rules/my-rules.md 改成你的偏好
+# Chỉnh sửa .ainovel/rules/my-rules.md theo sở thích của bạn
 ```
 
-加载优先级（高 → 低）三层：
+Ưu tiên tải (cao → thấp) theo ba lớp:
 
-1. `./.ainovel/rules/` 目录下任意 `.md` — **本书规则**（绑定当前工作目录 cwd，按文件名字典序合并）
-2. `~/.ainovel/rules/` 目录下任意 `.md` — **全局偏好**（跨书复用，按文件名字典序合并）
-3. `assets/rules/default.md` — **项目内置默认**（含去 AI 味机械基线；语义基线另在内置 `assets/references/anti-ai-tone.md`）
+1. Bất kỳ file `.md` nào trong `./.ainovel/rules/` — **quy tắc của cuốn sách này** (gắn với thư mục làm việc hiện tại cwd, hợp nhất theo thứ tự từ điển tên file)
+2. Bất kỳ file `.md` nào trong `~/.ainovel/rules/` — **sở thích toàn cục** (dùng lại qua nhiều sách, hợp nhất theo thứ tự từ điển tên file)
+3. `assets/rules/default.md` — **mặc định tích hợp sẵn của dự án** (gồm đường cơ sở máy móc chống văn phong AI; đường cơ sở ngữ nghĩa nằm trong `assets/references/anti-ai-tone.md` tích hợp sẵn)
 
-多来源声明同一字段且值不一致时**就近优先**生效；`fatigue_words` 按词合并，同一词在多来源声明不同阈值时按就近优先。冲突写进内部诊断信息（不进 LLM 上下文，由 CLI 启动面板按需展示），不阻断加载。
+Khi nhiều nguồn khai báo cùng một trường với giá trị khác nhau, **nguồn gần hơn được ưu tiên**; `fatigue_words` được hợp nhất theo từng từ, nếu cùng một từ được khai báo ngưỡng khác nhau ở nhiều nguồn thì ưu tiên nguồn gần hơn. Xung đột được ghi vào thông tin chẩn đoán nội bộ (không đưa vào cửa sổ ngữ cảnh của LLM, hiển thị theo yêu cầu qua bảng khởi động CLI), không chặn quá trình tải.
 
-> 去 AI 味即此机制的一例：内置基线（机械 `default.md` + 语义 `anti-ai-tone.md`）兜底，你的规则 `.md` 叠加在其上——大白话正文写语义偏好（主路径），需要硬性禁词/字数检查时再可选加 front matter，零编译生效。
+> Chống văn phong AI chính là một ví dụ của cơ chế này: đường cơ sở tích hợp sẵn (máy móc `default.md` + ngữ nghĩa `anti-ai-tone.md`) làm nền, quy tắc `.md` của bạn xếp chồng lên trên — viết sở thích ngữ nghĩa bằng ngôn ngữ thông thường trong phần thân (đường chính), khi cần kiểm tra cứng từ cấm/số từ thì tuỳ chọn thêm front matter, có hiệu lực ngay không cần biên dịch.
 
-## 多本书并行
+## Nhiều sách song song
 
-`./.ainovel/rules/` 绑定 **当前工作目录**，不绑定小说输出目录：
+`./.ainovel/rules/` gắn với **thư mục làm việc hiện tại**, không gắn với thư mục xuất truyện:
 
-- ✅ 推荐：每本书 cd 到独立目录启动（`cd works/xiyou && ainovel-cli` / `cd works/honglou && ainovel-cli`）— 每本书的 `./.ainovel/rules/` 独立
-- ⚠️ 边缘：从同一 cwd 用 `-o output/xiyou` / `-o output/honglou` 切换两本书 — 这两本书会共享同一份 `./.ainovel/rules/`
+- Khuyến nghị: mỗi sách cd vào thư mục riêng rồi khởi động (`cd works/xiyou && ainovel-cli` / `cd works/honglou && ainovel-cli`) — `./.ainovel/rules/` của mỗi sách độc lập
+- Trường hợp biên: khởi động từ cùng một cwd và dùng `-o output/xiyou` / `-o output/honglou` để chuyển đổi giữa hai sách — hai sách này sẽ dùng chung một `./.ainovel/rules/`
 
-如需"严格本书隔离"且不想换 cwd，把偏好放 `~/.ainovel/rules/` 全局目录，让所有书共享一套用户偏好。
+Nếu cần "cách ly nghiêm ngặt theo từng sách" mà không muốn đổi cwd, hãy đặt sở thích vào thư mục toàn cục `~/.ainovel/rules/` để tất cả các sách dùng chung một bộ sở thích người dùng.

@@ -2,7 +2,7 @@ package domain
 
 import "strings"
 
-// Phase 表示小说创作阶段。
+// Phase biểu thị giai đoạn sáng tác tiểu thuyết.
 type Phase string
 
 const (
@@ -13,7 +13,7 @@ const (
 	PhaseComplete Phase = "complete"
 )
 
-// FlowState 当前活动流程类型，用于 checkpoint 恢复。
+// FlowState loại luồng xử lý đang hoạt động, dùng để khôi phục từ điểm khôi phục.
 type FlowState string
 
 const (
@@ -24,7 +24,7 @@ const (
 	FlowSteering  FlowState = "steering"
 )
 
-// PlanningTier 表示作品规划的长度级别。
+// PlanningTier biểu thị cấp độ độ dài trong kế hoạch tác phẩm.
 type PlanningTier string
 
 const (
@@ -33,7 +33,7 @@ const (
 	PlanningTierLong  PlanningTier = "long"
 )
 
-// Progress 进度追踪，持久化到 meta/progress.json。
+// Progress theo dõi tiến trình, lưu vào meta/progress.json.
 type Progress struct {
 	NovelName         string      `json:"novel_name"`
 	Phase             Phase       `json:"phase"`
@@ -41,35 +41,37 @@ type Progress struct {
 	TotalChapters     int         `json:"total_chapters"`
 	CompletedChapters []int       `json:"completed_chapters"`
 	TotalWordCount    int         `json:"total_word_count"`
-	ChapterWordCounts map[int]int `json:"chapter_word_counts,omitempty"` // 每章字数，支持重写时修正总字数
-	InProgressChapter int         `json:"in_progress_chapter,omitempty"` // 正在写作的章节（场景级恢复）
-	CompletedScenes   []int       `json:"completed_scenes,omitempty"`    // 当前章节已完成的场景编号
-	Flow              FlowState   `json:"flow,omitempty"`                // 当前流程
-	PendingRewrites   []int       `json:"pending_rewrites,omitempty"`    // 待重写章节队列
-	RewriteReason     string      `json:"rewrite_reason,omitempty"`      // 重写原因
-	StrandHistory     []string    `json:"strand_history,omitempty"`      // 按章节顺序记录 dominant_strand
-	HookHistory       []string    `json:"hook_history,omitempty"`        // 按章节顺序记录 hook_type
-	// 长篇分层追踪（仅长篇模式使用，短篇/中篇为零值）
+	ChapterWordCounts map[int]int `json:"chapter_word_counts,omitempty"` // số từ mỗi chương, hỗ trợ hiệu chỉnh tổng số từ khi viết lại
+	InProgressChapter int         `json:"in_progress_chapter,omitempty"` // chương đang được viết (khôi phục ở cấp cảnh)
+	CompletedScenes   []int       `json:"completed_scenes,omitempty"`    // số cảnh đã hoàn thành trong chương hiện tại
+	Flow              FlowState   `json:"flow,omitempty"`                // luồng hiện tại
+	PendingRewrites   []int       `json:"pending_rewrites,omitempty"`    // hàng đợi các chương chờ viết lại
+	RewriteReason     string      `json:"rewrite_reason,omitempty"`      // lý do viết lại
+	StrandHistory     []string    `json:"strand_history,omitempty"`      // ghi lại dominant_strand theo thứ tự chương
+	HookHistory       []string    `json:"hook_history,omitempty"`        // ghi lại hook_type theo thứ tự chương
+	// Theo dõi phân tầng truyện dài (chỉ dùng ở chế độ dài; truyện ngắn/vừa để giá trị zero)
 	CurrentVolume int  `json:"current_volume,omitempty"`
 	CurrentArc    int  `json:"current_arc,omitempty"`
 	Layered       bool `json:"layered,omitempty"`
-	// ReopenedFromComplete 标记本书是经 reopen 从完结态重开进入返工的。返工只改已有章、
-	// 不增减结构，故排空后应按"结构完整即重新完结"放行（避免终卷末伏笔被返工扰动后卡在
-	// writing → 越界续写死循环）；正向写作不置此标记，完结判定保持线索收束的保守语义。
+	// ReopenedFromComplete đánh dấu cuốn sách này được mở lại từ trạng thái hoàn chỉnh qua reopen để vào chế độ rà soát lại.
+	// Rà soát lại chỉ sửa các chương đã có, không thêm/bớt cấu trúc, nên khi hàng đợi trống thì
+	// cho phép hoàn chỉnh theo tiêu chí "cấu trúc nguyên vẹn" (tránh vòng lặp vô tận
+	// writing → viết vượt phạm vi sau khi phục bút bị xáo trộn); viết thuận chiều không đặt cờ này,
+	// điều kiện hoàn chỉnh vẫn giữ ngữ nghĩa bảo thủ là thu gọn mạch truyện.
 	ReopenedFromComplete bool `json:"reopened_from_complete,omitempty"`
 }
 
-// IsResumable 判断是否可以从断点恢复。
+// IsResumable kiểm tra xem có thể tiếp tục từ điểm ngắt hay không.
 func (p *Progress) IsResumable() bool {
 	return p.Phase == PhaseWriting && p.CurrentChapter > 0
 }
 
-// NextChapter 返回下一个要写的章节号。
+// NextChapter trả về số thứ tự chương tiếp theo cần viết.
 func (p *Progress) NextChapter() int {
 	return p.LatestCompleted() + 1
 }
 
-// LatestCompleted 返回最大已完成章节号；无已完成章节时返回 0。
+// LatestCompleted trả về số chương đã hoàn thành lớn nhất; trả về 0 nếu chưa có chương nào hoàn thành.
 func (p *Progress) LatestCompleted() int {
 	max := 0
 	for _, ch := range p.CompletedChapters {
@@ -80,9 +82,10 @@ func (p *Progress) LatestCompleted() int {
 	return max
 }
 
-// ExtractNovelNameFromPremise 从 premise 第一行 `# 书名`（可带《》包裹）提取书名。
-// 模型偶尔会照抄提示词里的占位符而非生成真名，这些值视同未提取返回空，
-// 交由上层兜底（UI 显示"未定书名"），避免界面直接显示"书名"二字。
+// ExtractNovelNameFromPremise trích xuất tên sách từ dòng đầu tiên `# Tên sách` (có thể bọc bằng 《》) trong tiền đề.
+// Đôi khi mô hình sẽ chép lại placeholder từ prompt thay vì tạo tên thật, các giá trị đó
+// được coi là chưa trích xuất và trả về chuỗi rỗng,
+// để tầng trên xử lý dự phòng (UI hiển thị "Chưa đặt tên"), tránh hiển thị trực tiếp chữ "Tên sách".
 func ExtractNovelNameFromPremise(premise string) string {
 	for raw := range strings.SplitSeq(strings.ReplaceAll(premise, "\r\n", "\n"), "\n") {
 		line := strings.TrimSpace(raw)
@@ -94,23 +97,23 @@ func ExtractNovelNameFromPremise(premise string) string {
 		}
 		name := strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "# ")), "《》\"")
 		switch name {
-		case "书名", "实际书名", "示例书名":
-			return "" // 提示词占位符，非真实书名
+		case "书名", "实际书名", "示例书名", "Tên truyện", "Tên thực", "Ví dụ tên truyện":
+			return "" // placeholder trong prompt, không phải tên thật
 		}
 		return name
 	}
 	return ""
 }
 
-// ContextProfile 上下文加载策略，根据总章节数自适应。
+// ContextProfile chiến lược tải ngữ cảnh, tự động điều chỉnh theo tổng số chương.
 type ContextProfile struct {
-	SummaryWindow  int  // 加载最近 N 章摘要
-	TimelineWindow int  // 加载最近 N 章时间线
-	Layered        bool // true = 启用分层摘要加载（卷摘要+弧摘要+章摘要）
+	SummaryWindow  int  // tải tóm tắt N chương gần nhất
+	TimelineWindow int  // tải dòng thời gian N chương gần nhất
+	Layered        bool // true = bật tải tóm tắt phân tầng (tóm tắt tập + cung truyện + chương)
 }
 
-// MemoryPolicy 表示运行时共享的记忆使用策略。
-// 它既用于上下文输出，也用于宿主层的 handoff / reminder 决策。
+// MemoryPolicy biểu thị chính sách sử dụng bộ nhớ được chia sẻ lúc chạy.
+// Được dùng cho cả đầu ra ngữ cảnh lẫn quyết định handoff / reminder ở tầng host.
 type MemoryPolicy struct {
 	Mode                string `json:"mode,omitempty"`
 	SummaryWindow       int    `json:"summary_window,omitempty"`
@@ -132,7 +135,7 @@ type MemoryPolicy struct {
 	ReadOnlyThreshold   int    `json:"read_only_threshold,omitempty"`
 }
 
-// NewContextProfile 根据总章节数计算上下文策略。
+// NewContextProfile tính toán chiến lược ngữ cảnh dựa trên tổng số chương.
 func NewContextProfile(totalChapters int) ContextProfile {
 	switch {
 	case totalChapters <= 15:
@@ -144,24 +147,24 @@ func NewContextProfile(totalChapters int) ContextProfile {
 	}
 }
 
-// NewChapterMemoryPolicy 根据进度与上下文策略生成章节运行时记忆策略。
+// NewChapterMemoryPolicy tạo chính sách bộ nhớ lúc chạy cho chương dựa trên tiến trình và chiến lược ngữ cảnh.
 func NewChapterMemoryPolicy(progress *Progress, profile ContextProfile, currentOutlineBound bool) MemoryPolicy {
 	policy := MemoryPolicy{
 		Mode:                "chapter",
 		SummaryWindow:       profile.SummaryWindow,
 		TimelineWindow:      profile.TimelineWindow,
 		LayeredSummaries:    profile.Layered,
-		WorkingRefresh:      "每次按章节加载时刷新",
-		EpisodicRefresh:     "随章节提交、评审和长篇状态变更刷新",
+		WorkingRefresh:      "Làm mới mỗi lần tải theo chương",
+		EpisodicRefresh:     "Làm mới khi lưu chương, đánh giá và thay đổi trạng thái truyện dài",
 		PreviousTailChars:   800,
 		ChapterPlanEnabled:  true,
 		CurrentOutlineBound: currentOutlineBound,
 		ReadOnlyThreshold:   5,
 	}
 	if profile.Layered {
-		policy.SummaryStrategy = "卷摘要+弧摘要+最近章节摘要"
+		policy.SummaryStrategy = "Tóm tắt tập + tóm tắt cung truyện + tóm tắt chương gần nhất"
 	} else {
-		policy.SummaryStrategy = "最近章节摘要"
+		policy.SummaryStrategy = "Tóm tắt chương gần nhất"
 	}
 	if progress != nil {
 		policy.TotalChapters = progress.TotalChapters
@@ -187,21 +190,21 @@ func NewChapterMemoryPolicy(progress *Progress, profile ContextProfile, currentO
 	return policy
 }
 
-// NewArchitectMemoryPolicy 返回规划阶段使用的记忆策略。
+// NewArchitectMemoryPolicy trả về chính sách bộ nhớ dùng trong giai đoạn lập kế hoạch.
 func NewArchitectMemoryPolicy() MemoryPolicy {
 	return MemoryPolicy{
 		Mode:               "architect",
-		PlanningRefresh:    "卷弧结构、指南针或摘要更新时刷新",
-		FoundationRefresh:  "角色、伏笔、设定变更时刷新",
-		PlanningFocus:      "分层大纲、指南针、卷摘要",
-		FoundationFocus:    "角色设定、角色快照、伏笔台账",
+		PlanningRefresh:    "Làm mới khi cập nhật cấu trúc tập/cung truyện, la bàn hoặc tóm tắt",
+		FoundationRefresh:  "Làm mới khi thay đổi nhân vật, phục bút, thiết định",
+		PlanningFocus:      "Đề cương phân tầng, la bàn, tóm tắt tập",
+		FoundationFocus:    "Hồ sơ nhân vật, snapshot nhân vật, sổ theo dõi phục bút",
 		HandoffPreferred:   true,
 		ChapterPlanEnabled: false,
 		ReadOnlyThreshold:  4,
 	}
 }
 
-// RunMeta 运行元信息，持久化到 meta/run.json。
+// RunMeta thông tin meta lúc chạy, lưu vào meta/run.json.
 type RunMeta struct {
 	StartedAt    string       `json:"started_at"`
 	Provider     string       `json:"provider,omitempty"`
@@ -209,25 +212,26 @@ type RunMeta struct {
 	Model        string       `json:"model"`
 	PlanningTier PlanningTier `json:"planning_tier,omitempty"`
 	SteerHistory []SteerEntry `json:"steer_history,omitempty"`
-	PendingSteer string       `json:"pending_steer,omitempty"` // 未完成的 Steer 指令，中断恢复时重新注入
+	PendingSteer string       `json:"pending_steer,omitempty"` // lệnh Steer chưa hoàn thành, tái nạp khi khôi phục từ gián đoạn
 }
 
-// SteerEntry 用户干预记录。
+// SteerEntry bản ghi can thiệp của người dùng.
 type SteerEntry struct {
 	Input     string `json:"input"`
 	Timestamp string `json:"timestamp"`
 }
 
-// UserDirective 用户下达的长效创作要求，跨章节持续生效。
-// 持久化到 meta/user_directives.json，由 novel_context 注入
-// working_memory.user_directives 供所有子代理遵守。
+// UserDirective yêu cầu sáng tác dài hạn do người dùng đưa ra, có hiệu lực liên tục qua các chương.
+// Lưu vào meta/user_directives.json, được novel_context nạp vào
+// working_memory.user_directives để tất cả các agent phụ tuân thủ.
 //
-// Chapter/TotalChapters 是下达时的进度快照：让指令有明确的生效起点（不追溯
-// 之前的章节），也让误存的相对式指令（如"增加10章"）可被读取方判定为已满足，
-// 而不是每次重读都再执行一次。
+// Chapter/TotalChapters là snapshot tiến trình tại thời điểm đưa ra chỉ thị: giúp chỉ thị có
+// điểm bắt đầu rõ ràng (không áp dụng ngược về trước), đồng thời cho phép bên đọc
+// xác định các chỉ thị tương đối được lưu nhầm (ví dụ "thêm 10 chương") là đã thực hiện,
+// thay vì mỗi lần đọc lại lại thực thi một lần nữa.
 type UserDirective struct {
 	Text          string `json:"text"`
-	Chapter       int    `json:"chapter"`        // 下达时的写作进度
-	TotalChapters int    `json:"total_chapters"` // 下达时的规划总章数
+	Chapter       int    `json:"chapter"`        // tiến trình viết tại thời điểm đưa ra chỉ thị
+	TotalChapters int    `json:"total_chapters"` // tổng số chương theo kế hoạch tại thời điểm đưa ra chỉ thị
 	CreatedAt     string `json:"created_at"`     // RFC3339
 }

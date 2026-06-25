@@ -1,104 +1,104 @@
-# ainovel-cli 运行时架构
+# Kiến trúc runtime của ainovel-cli
 
-> 让 LLM 在一次 Run 里把一本小说写完，Host 只做启动 / 恢复 / 路由 / 观察，决策权尽量留给模型。
-
----
-
-## 1. 目标（按优先级）
-
-1. **稳定性**：一句话输入，稳定写完整本小说（200~500 章）。中间不因架构问题自行中断。
-2. **质量可迭代**：prompt / 参考资料 / 评审维度 / 上下文策略可独立调整，不牵连架构。
-3. **可恢复**：崩溃、断网、暂停后能从最近 checkpoint 继续。
-4. **可观测**：每章每 step 的进度、产物、用时可查。
-
-"稳定"是前提，"质量"是上层。每个架构决策优先服务稳定性。
+> Để LLM hoàn thành một cuốn tiểu thuyết trong một lần Run, Host chỉ đảm nhận khởi động / khôi phục / định tuyến / quan sát; quyền quyết định được giữ lại tối đa cho mô hình.
 
 ---
 
-## 2. 核心原则
+## 1. Mục tiêu (theo thứ tự ưu tiên)
 
-### 2.1 LLM 驱动创作与裁定，Host 驱动流程路由
+1. **Ổn định**: Nhập một câu, hệ thống viết ổn định toàn bộ tiểu thuyết (200~500 chương). Không tự ngắt giữa chừng do vấn đề kiến trúc.
+2. **Chất lượng có thể cải tiến**: prompt / tài liệu tham khảo / tiêu chí đánh giá / chiến lược ngữ cảnh có thể điều chỉnh độc lập, không ảnh hưởng đến kiến trúc.
+3. **Có thể khôi phục**: Sau khi crash, mất mạng, tạm dừng — có thể tiếp tục từ điểm khôi phục gần nhất.
+4. **Có thể quan sát**: Tiến độ, sản phẩm, thời gian xử lý của từng chương và từng bước đều có thể kiểm tra.
 
-垂类 agent 的决策空间封闭：流程图固定、分支有限、事实驱动。两类决策走不同载体：
-
-- **创作与裁定**（语义/质量/意图理解）→ LLM。Writer/Editor/Architect/Coordinator 裁定能力随模型升级线性受益
-- **流程路由**（读事实查表）→ 代码。`flow.Router` 纯函数 + 单测，错误率趋近 0
-
-Host 不直接调 SubAgent，而是在每个 Coordinator TurnEnd 由 Flow Router 计算指令，通过 `coordinator.FollowUp("[Host 下达指令]…")` 下达。
-
-### 2.2 工具是事实层唯一接口
-
-所有与文件系统、Progress、Checkpoint 的交互都由工具完成。**写类工具必须原子三件套**：artifact 落盘 + Progress 推进 + Checkpoint 追加，互斥锁内完成。重跑同一工具得到相同结果或直接跳过（digest 幂等）。
-
-### 2.3 观察层只观察
-
-UI、诊断、事件日志都是从事件流 / 只读工件投影出来的被动消费者。读事实，不产生事实，不影响控制流。
-
-**`internal/diag` 是引擎唯一的可观测性子系统**——一等支撑设施，但不是产品核心（核心是 §6 的创作引擎；diag 没了照样写小说）。它跨读几乎所有工件 + session + log + checkpoint，承担两职：① **创作质量诊断**（规则 → Finding，`/diag` 屏上报告）；② **运行时排错 + 脱敏导出**（行为骨架剥正文 + 循环聚合 → 覆盖式 `meta/diag-export.md`，供用户贴 issue；维护者拿不到本地 output 也能定位死循环/中断类问题）。
-
-**观察者纪律（不可松动）**：diag 可以诊断、可以建议，但**永不自己动手**——不自动修复、不续跑、不改流程。它越强，越有人想让它"顺手修一下"，越要守住这条，否则撞回 idleResume / StallDetector 那类已删除的坑（见 §10.5、§10.14）。对外结构（如 `RuntimeCapture`）当基础设施契约维护，别随意改字段。
-
-### 2.4 事实层扁平
-
-只有三类事实：
-
-- **Progress** — 进度索引（写到第几章、待重写列表）
-- **Checkpoint** — step 级推进记录（plan / draft / commit / review / arc_summary）
-- **Artifact** — 章节正文、大纲、角色、摘要等产物
-
-不引入 WorkflowInstance / TaskInstance / Command / Dispatcher 等抽象。
-
-### 2.5 三铁律
-
-**铁律一：工具只返事实，不返跨调度指令**。`commit_chapter` 返回 `arc_end_reached` / `next_skeleton_arc` 等结构化字段；不夹带 `[系统]` 类指令字符串。子代理内的 `next_step` 字段是事实陈述的内联指引（"我刚保存了 plan，下一步是 draft"），不算违反——见 §6.4。
-
-**铁律二：流程路由由 Flow Router 承担**。`internal/host/flow/router.go` 的 `Route(state) → *Instruction` 是纯函数，订阅 `EventToolExecEnd` 后通过 `FollowUp` 下达。返回 nil 表示"裁定场景，让 LLM 自主"。**指令通道不沉默**：Route 连续算出同一指令（说明上次派发后状态未推进）时，Dispatcher 附"第 N 次下达"事实重发而非静默吞掉——"路由结果重复"是只有 Host 能观测到的事实，沉默会让 Coordinator 落入"无指令不得行动 / StopGuard 不许停"的双重矛盾。不设阈值、不熔断，如何脱困由 LLM 裁定。
-
-**铁律三：Coordinator 不能物理 end_turn，除非 Phase=Complete**。StopGuard 在 agentcore 层拦截 `end_turn` 注入 user message；连续 5 次拦不住升级 terminate。三个子代理（architect / writer / editor）有各自的 `CheckpointDeltaGuard`。
+"Ổn định" là tiền đề, "chất lượng" là tầng trên. Mọi quyết định kiến trúc đều ưu tiên phục vụ tính ổn định.
 
 ---
 
-## 3. 架构全景
+## 2. Nguyên tắc cốt lõi
+
+### 2.1 LLM điều khiển sáng tác và phán quyết, Host điều khiển định tuyến quy trình
+
+Không gian quyết định của agent chuyên ngành là đóng: sơ đồ quy trình cố định, nhánh có hạn, dựa trên dữ liệu thực tế. Hai loại quyết định đi theo hai phương tiện khác nhau:
+
+- **Sáng tác và phán quyết** (ngữ nghĩa / chất lượng / hiểu ý định) → LLM. Khả năng phán quyết của Writer/Editor/Architect/Coordinator được hưởng lợi tuyến tính khi mô hình nâng cấp
+- **Định tuyến quy trình** (đọc dữ liệu thực tế, tra bảng) → code. `flow.Router` hàm thuần túy + unit test, tỉ lệ lỗi tiệm cận 0
+
+Host không gọi trực tiếp SubAgent, mà tại mỗi TurnEnd của Điều phối viên, Flow Router tính toán chỉ thị và truyền qua `coordinator.FollowUp("[Host hạ lệnh]…")`.
+
+### 2.2 Công cụ là giao diện duy nhất của tầng dữ liệu thực tế
+
+Mọi tương tác với hệ thống file, Progress, Checkpoint đều được thực hiện qua công cụ. **Công cụ ghi phải có bộ ba nguyên tử**: artifact ghi xuống đĩa + Progress cập nhật + Checkpoint thêm vào, thực hiện trong khóa loại trừ. Chạy lại cùng một công cụ cho kết quả giống nhau hoặc bỏ qua trực tiếp (digest idempotent).
+
+### 2.3 Tầng quan sát chỉ quan sát
+
+UI, chẩn đoán, nhật ký sự kiện đều là người tiêu thụ thụ động được chiếu từ luồng sự kiện / artifact chỉ đọc. Đọc dữ liệu thực tế, không tạo ra dữ liệu thực tế, không ảnh hưởng đến luồng điều khiển.
+
+**`internal/diag` là hệ thống con quan sát duy nhất của engine** — cơ sở hạ tầng hỗ trợ hàng đầu, nhưng không phải lõi sản phẩm (lõi là engine sáng tác ở §6; thiếu diag vẫn viết tiểu thuyết được). Nó đọc chéo hầu hết artifact + session + log + checkpoint, đảm nhận hai vai: ① **Chẩn đoán chất lượng sáng tác** (quy tắc → Finding, báo cáo màn hình `/diag`); ② **Debug runtime + xuất khử nhạy cảm** (bóc xương động hành vi bỏ nội dung chính + tổng hợp vòng lặp → `meta/diag-export.md` ghi đè, để người dùng paste issue; maintainer không có output local vẫn có thể xác định vòng lặp chết/vấn đề ngắt).
+
+**Kỷ luật quan sát (không được lơi lỏng)**: diag có thể chẩn đoán, có thể đề xuất, nhưng **không bao giờ tự tay làm** — không tự động sửa, không tiếp tục chạy, không thay đổi quy trình. Nó càng mạnh, càng có người muốn nó "nhân tiện sửa luôn", càng phải giữ vững ranh giới này, nếu không sẽ sa vào các bẫy idleResume / StallDetector đã bị xóa (xem §10.5, §10.14). Cấu trúc hướng ngoại (như `RuntimeCapture`) được duy trì như hợp đồng cơ sở hạ tầng, đừng tùy tiện thay đổi field.
+
+### 2.4 Tầng dữ liệu thực tế phẳng
+
+Chỉ có ba loại dữ liệu thực tế:
+
+- **Progress** — Chỉ mục tiến độ (đang viết đến chương mấy, danh sách chờ viết lại)
+- **Checkpoint** — Bản ghi cập nhật cấp bước (plan / draft / commit / review / arc_summary)
+- **Artifact** — Nội dung chương, đề cương, nhân vật, tóm tắt và các sản phẩm khác
+
+Không đưa vào các abstraction như WorkflowInstance / TaskInstance / Command / Dispatcher.
+
+### 2.5 Ba quy tắc sắt
+
+**Quy tắc sắt 1: Công cụ chỉ trả về dữ liệu thực tế, không trả về chỉ thị định tuyến liên lần gọi**. `commit_chapter` trả về các field có cấu trúc như `arc_end_reached` / `next_skeleton_arc`; không nhúng chuỗi chỉ thị dạng `[Hệ thống]`. Field `next_step` trong agent phụ là hướng dẫn nội tuyến trình bày dữ liệu thực tế ("Tôi vừa lưu plan, bước tiếp theo là draft") — không vi phạm quy tắc này — xem §6.4.
+
+**Quy tắc sắt 2: Định tuyến quy trình do Flow Router đảm nhận**. `Route(state) → *Instruction` trong `internal/host/flow/router.go` là hàm thuần túy, đăng ký `EventToolExecEnd` rồi truyền qua `FollowUp`. Trả về nil có nghĩa là "tình huống phán quyết, để LLM tự chủ". **Kênh chỉ thị không im lặng**: Khi Route liên tục tính ra cùng một chỉ thị (có nghĩa là trạng thái chưa cập nhật sau lần phát trước), Dispatcher đính kèm sự thực "lần phát thứ N" để phát lại thay vì im lặng nuốt — "kết quả định tuyến lặp lại" là sự thực chỉ Host có thể quan sát; im lặng sẽ khiến Điều phối viên rơi vào mâu thuẫn kép "không có chỉ thị không được hành động / StopGuard không cho phép dừng". Không đặt ngưỡng, không ngắt mạch; cách thoát khỏi tình trạng bế tắc do LLM phán quyết.
+
+**Quy tắc sắt 3: Điều phối viên không thể vật lý end_turn, trừ khi Phase=Complete**. StopGuard tầng agentcore chặn `end_turn` và inject user message; liên tiếp chặn 5 lần sẽ nâng cấp terminate. Ba agent phụ (architect / writer / editor) có `CheckpointDeltaGuard` riêng.
+
+---
+
+## 3. Toàn cảnh kiến trúc
 
 ```
-[Entry: TUI / headless]
+[Entry: TUI / chế độ không giao diện]
         │ prompt / steer
-[Host 薄外壳]
-   ├── observer        事件 → UI/日志投影
-   ├── flow.Dispatcher 订阅 ToolExecEnd → Route(state) → FollowUp
-   └── usage / 模型管理
+[Host vỏ mỏng]
+   ├── observer        sự kiện → chiếu UI/nhật ký
+   ├── flow.Dispatcher đăng ký ToolExecEnd → Route(state) → FollowUp
+   └── usage / quản lý mô hình
         │
-[Coordinator (LLM, MaxTurns=100_000)]
-   ├── 启动时裁定 architect_short / long
-   ├── 收 [Host 下达指令] → 生成 subagent tool_call
-   └── 收 [用户干预] → 自主裁定
+[Điều phối viên (LLM, MaxTurns=100_000)]
+   ├── Khi khởi động phán quyết architect_short / long
+   ├── Nhận [Host hạ lệnh] → tạo subagent tool_call
+   └── Nhận [Người dùng can thiệp] → phán quyết tự chủ
         │
-[architect / writer / editor SubAgent (各自独立 run + context + 模型)]
-        │ 工具调用
+[architect / writer / editor SubAgent (mỗi cái có run + context + mô hình độc lập)]
+        │ gọi công cụ
 [Tools]  novel_context · read_chapter · plan_chapter · draft_chapter · edit_chapter
          check_consistency · commit_chapter · save_review · save_arc_summary
          save_volume_summary · save_foundation
-        │ 原子三件套
-[Store: 文件系统 (tmp + rename)]
+        │ bộ ba nguyên tử
+[Store: hệ thống file (tmp + rename)]
    Progress · Checkpoints · Outline · Drafts · Summaries · Characters · World · Signals
 ```
 
-| 层 | 做什么 | 不做什么 |
+| Tầng | Làm gì | Không làm gì |
 |---|---|---|
-| Entry | 展示、接收输入 | 业务决策 |
-| Host | 启动/恢复/干预/事件投影/Flow 路由 | 绕过 Coordinator 直接调 SubAgent；写状态 |
-| Coordinator | 执行 Host 指令、裁定用户 Steer、启动选规划师 | 自行决定每章下一步；写文件 |
-| Agents | 思考、写作、审阅 | 直接读写 Store |
-| Tools | 原子 IO + checkpoint + 幂等 | 跨子代理调度指令 |
-| Store | 文件系统落盘 | 业务逻辑 |
+| Entry | Hiển thị, nhận đầu vào | Quyết định nghiệp vụ |
+| Host | Khởi động/khôi phục/can thiệp/chiếu sự kiện/định tuyến Flow | Bỏ qua Điều phối viên gọi trực tiếp SubAgent; ghi trạng thái |
+| Điều phối viên | Thực thi chỉ thị Host, phán quyết Steer người dùng, khởi động chọn người lập kế hoạch | Tự quyết định bước tiếp theo của mỗi chương; ghi file |
+| Agents | Suy nghĩ, viết lách, đánh giá | Đọc ghi Store trực tiếp |
+| Tools | IO nguyên tử + checkpoint + idempotent | Chỉ thị định tuyến liên agent |
+| Store | Ghi xuống đĩa hệ thống file | Logic nghiệp vụ |
 
-依赖单向：`entry → host → agents → tools → store → domain`。`tools/` 不引用 `agents/host/`，`host/` 不直接引用 `tools/store/`。横向独立模块：`errs/` 可被任何层引用，`diag/` 订阅 host 事件流 + 只读 `store/`。
+Phụ thuộc một chiều: `entry → host → agents → tools → store → domain`. `tools/` không tham chiếu `agents/host/`, `host/` không tham chiếu trực tiếp `tools/store/`. Module độc lập ngang: `errs/` có thể được bất kỳ tầng nào tham chiếu, `diag/` đăng ký luồng sự kiện host + chỉ đọc `store/`.
 
 ---
 
-## 4. 数据模型
+## 4. Mô hình dữ liệu
 
-### 4.1 Progress（`internal/domain/runtime.go`）
+### 4.1 Progress (`internal/domain/runtime.go`)
 
 ```go
 type Progress struct {
@@ -109,24 +109,24 @@ type Progress struct {
     CompletedChapters []int
     TotalWordCount    int
     ChapterWordCounts map[int]int
-    InProgressChapter int             // 正在写作的章节
+    InProgressChapter int             // chương đang được viết
     Flow              FlowState       // writing / reviewing / rewriting / polishing / steering
     PendingRewrites   []int
-    StrandHistory     []string        // dominant_strand 序列
-    HookHistory       []string        // hook_type 序列
-    CurrentVolume, CurrentArc int     // 长篇分层
+    StrandHistory     []string        // chuỗi dominant_strand
+    HookHistory       []string        // chuỗi hook_type
+    CurrentVolume, CurrentArc int     // phân tầng tiểu thuyết dài
     Layered           bool
 }
 ```
 
-控制逻辑只读上述事实字段，不依赖任何"更新时间戳"——时间信息由 checkpoint 的 `OccurredAt` 承载。
+Logic điều khiển chỉ đọc các field dữ liệu thực tế nêu trên, không phụ thuộc vào bất kỳ "timestamp cập nhật" nào — thông tin thời gian được mang bởi `OccurredAt` của checkpoint.
 
-### 4.2 Checkpoint（`internal/domain/checkpoint.go`）
+### 4.2 Checkpoint (`internal/domain/checkpoint.go`)
 
 ```go
 type Scope      struct { Kind ScopeKind; Chapter, Volume, Arc int }
 type Checkpoint struct {
-    Seq        int64       // 单调自增
+    Seq        int64       // tăng đơn điệu
     Scope      Scope       // chapter / arc / volume / global
     Step       string      // plan / draft / commit / review / arc_summary / ...
     Artifact   string
@@ -135,70 +135,70 @@ type Checkpoint struct {
 }
 ```
 
-存储：`meta/checkpoints.jsonl`，只追加。重复写入相同 `Scope+Step+Digest` 视为幂等不产生新行。
+Lưu trữ: `meta/checkpoints.jsonl`, chỉ thêm vào. Ghi trùng lặp cùng `Scope+Step+Digest` được coi là idempotent, không tạo dòng mới.
 
-### 4.3 Artifact 与 Signals
+### 4.3 Artifact và Signals
 
-Artifact 在 `store/outline.go` `drafts.go` `summaries.go` `characters.go` `world.go` —— 每种产物都能被 checkpoint 引用。
+Artifact nằm trong `store/outline.go` `drafts.go` `summaries.go` `characters.go` `world.go` — mỗi loại sản phẩm đều có thể được checkpoint tham chiếu.
 
-Signals：`PendingCommit`（commit 中断恢复）/ `PendingSteer`（停机期间用户干预）。启动/恢复时读，运行时不读。
+Signals: `PendingCommit` (khôi phục ngắt commit) / `PendingSteer` (can thiệp người dùng trong thời gian dừng máy). Đọc khi khởi động/khôi phục, không đọc trong lúc chạy.
 
 ---
 
-## 5. 工具规约
+## 5. Giao ước công cụ
 
-工具是事实层与 Agent 的唯一交互点。
+Công cụ là điểm tương tác duy nhất giữa tầng dữ liệu thực tế và Agent.
 
-### 5.1 读类工具
+### 5.1 Công cụ đọc
 
-`novel_context(scope)` / `read_chapter(n)` —— 任何时候可调用，不依赖前置状态，返回数据足够 LLM 独立决策。
+`novel_context(scope)` / `read_chapter(n)` — có thể gọi bất kỳ lúc nào, không phụ thuộc vào trạng thái tiền đề, trả về dữ liệu đủ để LLM quyết định độc lập.
 
-### 5.2 写类工具（原子三件套）
+### 5.2 Công cụ ghi (bộ ba nguyên tử)
 
-每次成功调用必须：artifact 落盘 → Progress 推进 → checkpoint 追加。三步互斥锁内完成。
+Mỗi lần gọi thành công phải: artifact ghi xuống đĩa → Progress cập nhật → checkpoint thêm vào. Ba bước hoàn thành trong khóa loại trừ.
 
-| 工具 | Artifact | Step |
+| Công cụ | Artifact | Step |
 |---|---|---|
 | `plan_chapter` | drafts/chXX.plan.json | plan |
 | `draft_chapter` | drafts/chXX.draft.md | draft |
 | `edit_chapter` | drafts/chXX.draft.md | edit |
-| `check_consistency` | 无（只读，inline 返回） | consistency_check |
+| `check_consistency` | Không có (chỉ đọc, trả về inline) | consistency_check |
 | `commit_chapter` | chapters/chXX.md + Progress | commit |
-| `save_review` | reviews/chXX.json（global 为 chXX-global.json） | review |
+| `save_review` | reviews/chXX.json (global là chXX-global.json) | review |
 | `save_arc_summary` | summaries/arc-vNNaNN.json | arc_summary |
 | `save_volume_summary` | summaries/vol-vNN.json | volume_summary |
 | `save_foundation` | foundation/*.json | premise / outline / layered_outline / characters / world_rules / expand_arc / append_volume / update_compass / complete_book |
 
-`commit_chapter` 承担弧/卷/全书完成检测，返回 19 个事实字段（`arc_end` / `needs_expansion` / `book_complete` 等；启用机械规则检查时再附 `rule_violations`）。`save_review` 承担 verdict 升级（评分卡门禁、契约 missed → rewrite）。这些过去散落在 policy 层的逻辑现在固化在工具内部。
+`commit_chapter` đảm nhận phát hiện kết thúc cung/tập/toàn sách, trả về 19 field dữ liệu thực tế (`arc_end` / `needs_expansion` / `book_complete` v.v.; khi bật kiểm tra quy tắc cơ học thì thêm `rule_violations`). `save_review` đảm nhận nâng cấp verdict (cổng chấm điểm, hợp đồng missed → rewrite). Những logic trước đây rải rác ở tầng policy nay được cố định trong nội bộ công cụ.
 
-`edit_chapter` 是 `agentcore.EditTool` 的薄封装，归属检查保证已完成章节必须在 `PendingRewrites` 中才能编辑。
+`edit_chapter` là wrapper mỏng của `agentcore.EditTool`, kiểm tra quyền sở hữu đảm bảo chương đã hoàn thành phải nằm trong `PendingRewrites` mới được chỉnh sửa.
 
-### 5.3 错误分层
+### 5.3 Phân tầng lỗi
 
-| 错误类型 | 处理层 | 动作 |
+| Loại lỗi | Tầng xử lý | Hành động |
 |---|---|---|
-| 网络超时 / 流式 EOF | Tools | 重试 3 次 |
-| provider 429/503 | litellm | failover 到备用 provider |
-| 鉴权 / 模型不存在 | Tools | terminal 上抛 |
-| 缺前置 artifact | Tools | conflict 上抛，LLM 调 `novel_context` 后重试 |
-| 工具参数非法 | Tools | validation 上抛，LLM 改参数 |
-| MaxTurns 耗尽 | agentcore | run 结束，Host 发 done |
-| LLM 不合规消息（thinking-only stop 等） | agentcore (`llm/litellm.go` `convertMessages`) | 入栈兜底 + 出栈过滤；Host 不感知 |
-| 流式空响应 / 长思考 | litellm (`StreamIdleTimeout=5min`) | watchdog 触发重试 |
+| Network timeout / streaming EOF | Tools | Thử lại 3 lần |
+| provider 429/503 | litellm | failover sang nhà cung cấp dự phòng |
+| Xác thực / mô hình không tồn tại | Tools | Ném lên terminal |
+| Thiếu artifact tiền đề | Tools | Ném lên conflict, LLM gọi `novel_context` rồi thử lại |
+| Tham số công cụ không hợp lệ | Tools | Ném lên validation, LLM sửa tham số |
+| MaxTurns cạn | agentcore | run kết thúc, Host phát done |
+| Tin nhắn không hợp lệ từ LLM (thinking-only stop, v.v.) | agentcore (`llm/litellm.go` `convertMessages`) | Đẩy vào stack dự phòng + lọc khi pop; Host không nhận biết |
+| Phản hồi streaming rỗng / suy nghĩ dài | litellm (`StreamIdleTimeout=5min`) | watchdog kích hoạt thử lại |
 
-### 5.4 幂等
+### 5.4 Idempotent
 
-每个写类工具执行前先检查 checkpoint：如果当前 scope 最新 checkpoint 的 `Step+Digest` 与本次相同，直接返回已有产物。LLM 可以放心重试，不会产生重复章节或错位进度。
+Trước khi thực thi mỗi công cụ ghi, kiểm tra checkpoint trước: nếu `Step+Digest` của checkpoint mới nhất trong scope hiện tại giống với lần này, trả về trực tiếp sản phẩm đã có. LLM có thể yên tâm thử lại mà không tạo ra chương trùng lặp hoặc tiến độ sai lệch.
 
 ---
 
-## 6. Agent 装配
+## 6. Lắp ráp Agent
 
-> 单一超大 Prompt + 单一 Agent 跑完一本书理论可行，但三件事会阻塞稳定性：**上下文爆炸**（200 章再强压缩也退化）、**职责干扰**（规划严谨 / 写作想象 / 审阅批判在同一 prompt 互相冲淡）、**模型异构红利损失**（规划用 Opus、写作用 Sonnet、审阅用 Pro，独立选模型在长篇上是显著的成本/质量优化空间）。多 agent 拓扑因此必要。
+> Một Prompt siêu lớn + một Agent duy nhất chạy xong một cuốn sách là khả thi về lý thuyết, nhưng ba vấn đề sẽ cản trở tính ổn định: **bùng nổ ngữ cảnh** (200 chương dù nén mạnh cũng thoái hóa), **nhiễu loạn trách nhiệm** (lập kế hoạch nghiêm túc / sáng tác tưởng tượng / đánh giá phê phán pha loãng lẫn nhau trong cùng một prompt), **mất lợi ích từ mô hình dị thể** (lập kế hoạch dùng Opus, viết lách dùng Sonnet, đánh giá dùng Pro — chọn mô hình độc lập là không gian tối ưu hóa chi phí/chất lượng đáng kể cho tiểu thuyết dài). Topo đa agent vì vậy là cần thiết.
 
-### 6.1 Coordinator
+### 6.1 Điều phối viên
 
-唯一的主循环驱动者。装配在 `internal/agents/build.go`：
+Người điều khiển vòng lặp chính duy nhất. Được lắp ráp trong `internal/agents/build.go`:
 
 ```go
 agent := agentcore.NewAgent(
@@ -207,86 +207,86 @@ agent := agentcore.NewAgent(
     agentcore.WithTools(subagentTool, contextTool),
     agentcore.WithMaxTurns(100_000),
     agentcore.WithToolsAreIdempotent(true),
-    agentcore.WithMaxToolErrors(0),  // subagent 不熔断
+    agentcore.WithMaxToolErrors(0),  // không ngắt mạch subagent
     agentcore.WithMaxRetries(subagentMaxRetries),
     agentcore.WithContextManager(...),
     agentcore.WithStopGuard(reminder.NewStopGuard(store, nil)),
-    agentcore.WithToolGate(completePhaseGate(store)),  // phase=complete 硬拦 subagent 派发
+    agentcore.WithToolGate(completePhaseGate(store)),  // phase=complete chặn cứng phát subagent
 )
 ```
 
-职责：启动时选规划师 → 规划补齐循环 → 收 `[Host 下达指令]` 立即生成对应 `subagent` tool_call → 处理 `[用户干预]` 自主裁定 → `book_complete=true` 后输出总结。
+Trách nhiệm: khi khởi động chọn người lập kế hoạch → vòng lặp bổ sung kế hoạch → nhận `[Host hạ lệnh]` ngay lập tức tạo `subagent` tool_call tương ứng → xử lý `[Người dùng can thiệp]` phán quyết tự chủ → sau `book_complete=true` xuất tóm tắt.
 
-不做：写文件、直接读 Progress（用 novel_context）、Host 指令到达时自行决定下一步。
+Không làm: ghi file, đọc trực tiếp Progress (dùng novel_context), tự quyết định bước tiếp theo khi chỉ thị Host đến.
 
-> **为什么不删掉 Coordinator 让 Host 直接调子代理？** 看起来更"干净"，但会失去四样东西：(1) "下一步做什么"的决策保留在 LLM 层，模型升级直接受益；(2) 评审 verdict 的软判断（accept/polish/rewrite + 影响范围）从 Go 代码移出去；(3) 用户 Steer 的影响评估交给模型——一句"配角动机要更清晰"该重写哪几章，Coordinator 能判断、Host 硬编码不行；(4) 异常分支（writer 大纲反馈、editor 发现世界观漏洞）由模型自己处理，避免为每个分支写 Go 状态机。**删掉 Coordinator 等于把赌注从"模型越来越强"换成"我的 Go 代码越来越强"——这不是好赌注**。
+> **Tại sao không xóa Điều phối viên và để Host gọi trực tiếp agent phụ?** Trông có vẻ "gọn hơn", nhưng sẽ mất bốn thứ: (1) Quyết định "bước tiếp theo làm gì" được giữ ở tầng LLM, mô hình nâng cấp trực tiếp được hưởng lợi; (2) Phán quyết mềm về verdict đánh giá (accept/polish/rewrite + phạm vi ảnh hưởng) được chuyển ra khỏi Go code; (3) Đánh giá ảnh hưởng của Steer người dùng giao cho mô hình — câu "động cơ nhân vật phụ phải rõ hơn" cần viết lại những chương nào, Điều phối viên có thể phán quyết nhưng Host hard-code thì không; (4) Nhánh bất thường (phản hồi đề cương từ writer, editor phát hiện lỗ hổng thế giới quan) được mô hình tự xử lý, tránh phải viết Go state machine cho từng nhánh. **Xóa Điều phối viên là chuyển cược từ "mô hình ngày càng mạnh" sang "Go code của tôi ngày càng mạnh" — đây không phải cược hay**.
 
-### 6.2 子代理拓扑与模型异构
+### 6.2 Topo agent phụ và mô hình dị thể
 
 ```
-Coordinator (1 agent run, MaxTurns=100_000)
+Điều phối viên (1 agent run, MaxTurns=100_000)
     ↓ subagent()
 architect_short/long  ·  writer  ·  editor
-    ↓ 工具调用
-Store (协作媒介，子代理之间不直接通信)
+    ↓ gọi công cụ
+Store (môi trường hợp tác, các agent phụ không giao tiếp trực tiếp với nhau)
 ```
 
-子代理 turn 计数独立（agentcore 原生），不占 Coordinator 的 100_000 turn 配额。子代理之间通过 Store 中的结构化工件通信，Coordinator 只传"任务描述"不搬内容。
+Bộ đếm turn của agent phụ là độc lập (nguyên gốc agentcore), không chiếm quota 100_000 turn của Điều phối viên. Các agent phụ giao tiếp qua artifact có cấu trúc trong Store, Điều phối viên chỉ truyền "mô tả nhiệm vụ" chứ không chuyển nội dung.
 
-`bootstrap.ModelSet` 支持角色级模型：coordinator/architect/writer/editor 各自独立配置 + provider failover。Writer 跑 Sonnet 而不是 Opus 在 200 章长篇上能省一个数量级成本。
+`bootstrap.ModelSet` hỗ trợ mô hình cấp vai trò: coordinator/architect/writer/editor đều có cấu hình độc lập + provider failover. Writer chạy Sonnet thay vì Opus có thể tiết kiệm một bậc chi phí trong tiểu thuyết dài 200 chương.
 
-### 6.3 三类协作模式
+### 6.3 Ba chế độ hợp tác
 
-子代理之间不直接通信，所有信息流经 Store 中的结构化工件。三类模式覆盖系统的全部工作流：
+Các agent phụ không giao tiếp trực tiếp, mọi luồng thông tin đều đi qua artifact có cấu trúc trong Store. Ba chế độ bao phủ toàn bộ workflow của hệ thống:
 
-**模式 A · 串行移交（主干）**：Coordinator → Architect 规划 → Writer 章 1..N → Editor 弧末评审 → Writer 重写。最常见的模式，Coordinator 通过 `novel_context` 查当前状态判断下一步调谁。
+**Chế độ A · Bàn giao tuần tự (nhánh chính)**: Điều phối viên → Kiến trúc sư lập kế hoạch → Người viết chương 1..N → Biên tập viên đánh giá cuối cung → Người viết viết lại. Chế độ phổ biến nhất, Điều phối viên dùng `novel_context` tra trạng thái hiện tại để quyết định gọi ai tiếp theo.
 
-**模式 B · 审阅反馈（闭环）**：Writer 在 draft 中发现大纲偏离 → `commit_chapter` 返回值携带 `writer_feedback` 字段 → Coordinator 看到反馈判断是否升级为 architect 调用调整大纲。Writer 不直接呼叫 Architect，反馈通过结构化字段送回 Coordinator。
+**Chế độ B · Phản hồi đánh giá (vòng kín)**: Người viết phát hiện đề cương lệch trong bản nháp → Giá trị trả về của `commit_chapter` mang field `writer_feedback` → Điều phối viên thấy phản hồi phán quyết có nên nâng cấp thành lời gọi architect để điều chỉnh đề cương. Người viết không gọi trực tiếp Kiến trúc sư, phản hồi được gửi về Điều phối viên qua field có cấu trúc.
 
-**模式 C · 骨架展开（滚动规划）**：`commit_chapter` 检测到下一弧仍是骨架 → 返回 `arc_end_reached + next_skeleton_arc` → Flow Router 派发指令 → Coordinator 调 architect_long 展开下一弧详细章节 → Writer 继续。长篇"滚动规划"能力就是这个闭环实现。
+**Chế độ C · Mở rộng khung xương (kế hoạch cuộn)**: `commit_chapter` phát hiện cung tiếp theo vẫn là khung xương → trả về `arc_end_reached + next_skeleton_arc` → Flow Router phát chỉ thị → Điều phối viên gọi architect_long mở rộng các chương chi tiết của cung tiếp theo → Người viết tiếp tục. Khả năng "kế hoạch cuộn" tiểu thuyết dài chính là vòng kín này.
 
-### 6.4 子代理流程的代码约束（不靠 prompt 拐杖）
+### 6.4 Ràng buộc code của quy trình agent phụ (không dựa vào nạng prompt)
 
-> 早期 writer 流程靠 `writer.md` 的"严格按以下顺序推进"约束。LLM 经常违反——跳过 plan 直接 draft、commit 后继续多说一段消耗 token、把正文只写到聊天里不落盘。**提示词约束流程不稳定**，强弱完全取决于模型当下"听话程度"，模型升级反而可能让它"创造性地不遵守"。
+> Ban đầu quy trình writer dựa vào ràng buộc "nghiêm ngặt theo thứ tự sau" trong `writer.md`. LLM thường vi phạm — bỏ qua plan nhảy thẳng draft, sau commit tiếp tục nói thêm một đoạn tiêu tốn token, chỉ viết nội dung vào chat mà không ghi xuống. **Ràng buộc quy trình bằng prompt không ổn định**, mạnh yếu hoàn toàn phụ thuộc vào mức độ "nghe lời" của mô hình lúc đó, mô hình nâng cấp còn có thể "sáng tạo mà không tuân thủ".
 
-四层代码约束（同时生效）：
+Bốn tầng ràng buộc code (cùng hiệu lực):
 
-| 层 | 落点 | 作用 |
+| Tầng | Điểm tác dụng | Vai trò |
 |---|---|---|
-| `StopAfterTools` / `StopAfterToolResult` | `agents/build.go` SubAgentConfig | 关键工具成功即 end_turn 退出 subagent run。Writer `commit_chapter` 命中即停（`StopAfterTools`）；Editor 的 `save_arc_summary`/`save_volume_summary`、Architect 弧/卷收尾走 `StopAfterToolResult`。Editor 的 `save_review` 不硬停——否则绕过 StopGuard 砍断弧摘要 run，收尾交 `NewEditorStopGuard` |
-| `CheckpointDeltaGuard` | `host/reminder/subagent_guards.go` | 以 baseline checkpoint 为分界，本轮结束前必须看到对应 step 的新 checkpoint，否则拒绝 `end_turn`；连续拦 3 次升级 terminate（弱模型死循环兜底） |
-| 工具内联 `next_step` | 各工具返回值字段 | 每个事实自带"下一步建议"。如 `plan_chapter` 返回 `next_step: "立即调用 draft_chapter..."`。LLM 看到事实就知道下一步，不用回到 system prompt 找 |
-| 工具内归属/前置检查 | `edit_chapter` `commit_chapter` 等 | 数据层物理拦截：`edit_chapter` 拒绝改未列入 `PendingRewrites` 的已完成章；`commit_chapter` 拒绝草稿==终稿的空提交；`ConcurrencySafe=false` 阻止并发竞态 |
+| `StopAfterTools` / `StopAfterToolResult` | `agents/build.go` SubAgentConfig | Công cụ quan trọng thành công → end_turn thoát subagent run. Writer nhấn `commit_chapter` dừng ngay (`StopAfterTools`); `save_arc_summary`/`save_volume_summary` của Editor, kết thúc cung/tập của Architect đi `StopAfterToolResult`. `save_review` của Editor không dừng cứng — nếu không sẽ cắt ngang StopGuard, kết thúc giao cho `NewEditorStopGuard` |
+| `CheckpointDeltaGuard` | `host/reminder/subagent_guards.go` | Lấy checkpoint baseline làm ranh giới, trước khi kết thúc lượt này phải thấy checkpoint mới của bước tương ứng, nếu không từ chối `end_turn`; chặn liên tiếp 3 lần nâng cấp terminate (dự phòng vòng lặp chết của mô hình yếu) |
+| `next_step` nội tuyến trong công cụ | Field giá trị trả về của các công cụ | Mỗi dữ liệu thực tế kèm "gợi ý bước tiếp theo". Ví dụ `plan_chapter` trả về `next_step: "Lập tức gọi draft_chapter..."`. LLM thấy dữ liệu thực tế là biết bước tiếp theo, không cần quay lại system prompt tìm |
+| Kiểm tra quyền sở hữu/tiền đề trong công cụ | `edit_chapter` `commit_chapter` v.v. | Chặn vật lý ở tầng dữ liệu: `edit_chapter` từ chối sửa chương đã hoàn thành nhưng không có trong `PendingRewrites`; `commit_chapter` từ chối commit rỗng khi bản nháp == bản cuối; `ConcurrencySafe=false` ngăn race condition đồng thời |
 
-writer.md 在新架构里只承担：写作质量指南、断点续跑认知模型、章节契约解读。**不再做流程编排** —— LLM 跳步时 prompt 不会救场，代码会。architect / editor 同样的四层约束在各自工具/Guard 里。
+writer.md trong kiến trúc mới chỉ đảm nhận: hướng dẫn chất lượng viết, mô hình nhận thức chạy tiếp từ điểm dừng, giải thích hợp đồng chương. **Không còn làm điều phối quy trình** — khi LLM bỏ bước thì prompt không cứu, code sẽ cứu. Architect / editor cũng có bốn tầng ràng buộc tương tự trong công cụ/Guard riêng của chúng.
 
-> 关于铁律一：`next_step` 是工具内联的事实陈述（"我刚保存了 plan"），不是 Host 跨调用注入的流程编排。Coordinator 层的跨子代理调度仍严格走 Flow Router → FollowUp。
+> Về quy tắc sắt 1: `next_step` là trình bày dữ liệu thực tế nội tuyến trong công cụ ("Tôi vừa lưu plan"), không phải điều phối quy trình được Host inject xuyên lần gọi. Việc định tuyến liên agent phụ ở tầng Điều phối viên vẫn đi nghiêm ngặt qua Flow Router → FollowUp.
 
-### 6.5 agentcore 依赖
+### 6.5 Phụ thuộc agentcore
 
-`../agentcore` 是本项目自有的通用 Agent 库（go.work 关联）。新架构用到的原语全部已存在：`Prompt` / `Inject` / `FollowUp` / `Subscribe` / `WithMaxTurns` / `WithStopGuard` / `WithToolGate` / `SubAgentConfig` / `WithContextManager`。
+`../agentcore` là thư viện Agent dùng chung của dự án (liên kết go.work). Tất cả primitive được dùng trong kiến trúc mới đều đã tồn tại: `Prompt` / `Inject` / `FollowUp` / `Subscribe` / `WithMaxTurns` / `WithStopGuard` / `WithToolGate` / `SubAgentConfig` / `WithContextManager`.
 
-**修改边界**：
+**Ranh giới sửa đổi**:
 
-- 可进 agentcore：新 ContextManager 策略、新 provider 适配、新事件类型、通用消息注入模式
-- 不进 agentcore：Progress/Checkpoint/Scope 等业务模型，novel_context/commit_chapter 等业务工具，弧结束检测/评审门禁等业务规则
+- Có thể vào agentcore: chiến lược ContextManager mới, adapter nhà cung cấp mới, loại sự kiện mới, mẫu inject tin nhắn chung
+- Không vào agentcore: mô hình nghiệp vụ như Progress/Checkpoint/Scope, công cụ nghiệp vụ như novel_context/commit_chapter, quy tắc nghiệp vụ như phát hiện kết thúc cung/cổng đánh giá
 
-判断准则：假设 agentcore 未来会被 coding agent / 客服 agent 引入，新加能力在那个场景下仍有意义才允许进。**禁止在应用层写兜底补丁**（代理、包装器、monkey patch）—— 缺能力直接去 agentcore 改。
+Tiêu chí phán quyết: Giả sử agentcore trong tương lai sẽ được coding agent / customer service agent sử dụng, khả năng mới thêm vào vẫn có ý nghĩa trong những tình huống đó mới được phép vào. **Cấm viết patch vá víu ở tầng ứng dụng** (proxy, wrapper, monkey patch) — thiếu khả năng thì vào agentcore sửa trực tiếp.
 
-**故意不用的能力**（避免误用）：
+**Khả năng cố ý không dùng** (tránh lạm dụng):
 
-- `Agent.TaskRuntime() / Tasks() / StopTask()` — agentcore 内置的后台任务管理器（fire-and-forget background subagent）。新架构所有子代理调用都是前台同步的，**不使用**
-- `Agent.FollowUp(msg)` — **唯一合法使用者是 `flow.Dispatcher`**，用于下达 `[Host 下达指令]`。Host 其它公开方法禁止调用。用户 Steer 走 `Inject`（保留立即打断能力），Resume 走 `Prompt` 启新 run
-- `Agent.Steer(msg)` — 旧 steering 接口，新架构一律用 `Inject`
-- `WithPermission*` — 权限审批机制（人工 approve 危险操作），小说应用没有危险操作，**不使用**
+- `Agent.TaskRuntime() / Tasks() / StopTask()` — Task manager nền tích hợp trong agentcore (background subagent fire-and-forget). Kiến trúc mới mọi lời gọi agent phụ đều là foreground đồng bộ, **không sử dụng**
+- `Agent.FollowUp(msg)` — **Người dùng hợp pháp duy nhất là `flow.Dispatcher`**, dùng để hạ `[Host hạ lệnh]`. Các phương thức công khai khác của Host bị cấm gọi. Steer người dùng đi `Inject` (giữ khả năng ngắt ngay), Resume đi `Prompt` khởi chạy Run mới
+- `Agent.Steer(msg)` — Interface steering cũ, kiến trúc mới dùng `Inject` toàn bộ
+- `WithPermission*` — Cơ chế phê duyệt quyền (người phê duyệt thủ công các thao tác nguy hiểm), ứng dụng viết tiểu thuyết không có thao tác nguy hiểm, **không sử dụng**
 
-**已启用的策略 hook**：`WithToolGate` —— 唯一用途是 `phase=complete` 时硬拦 `subagent` 派发（`agents/build.go` `completePhaseGate`）。完结后用户若请求续写/重写，Coordinator LLM 仍可能自派子代理，而 Writer 写越界章会被 `commit_chapter` 拒绝、`CheckpointDeltaGuard` 又不放行 `end_turn` → 死循环。Flow Router 在 complete 时返回 nil 只挡住 Host 自动派发，挡不住 LLM 主动派发，故由 Gate 在咽喉点补一道终态防护。它是窄用途的流程兜底，**不是 `WithPermission*` 那种审批流**，两者勿混。
+**Policy hook đã bật**: `WithToolGate` — Mục đích duy nhất là khi `phase=complete` chặn cứng phát `subagent` (`agents/build.go` `completePhaseGate`). Sau khi hoàn thành, nếu người dùng yêu cầu viết tiếp/viết lại, Coordinator LLM vẫn có thể tự phát agent phụ, mà Writer viết chương vượt phạm vi sẽ bị `commit_chapter` từ chối, `CheckpointDeltaGuard` lại không cho `end_turn` → vòng lặp chết. Flow Router trả về nil khi complete chỉ chặn được Host tự động phát, không chặn được LLM chủ động phát, nên Gate bổ sung một lớp bảo vệ trạng thái cuối ở điểm yết hầu. Đây là dự phòng quy trình hẹp mục đích, **không phải luồng phê duyệt `WithPermission*`**, không được nhầm lẫn hai loại.
 
 ---
 
-## 7. Host 层
+## 7. Tầng Host
 
-### 7.1 结构
+### 7.1 Cấu trúc
 
 ```go
 type Host struct {
@@ -295,17 +295,17 @@ type Host struct {
     store             *store.Store
     models            *bootstrap.ModelSet
     coordinator       *agentcore.Agent
-    coordinatorCtxMgr *corecontext.ContextEngine  // 切模型时联动上下文窗口
+    coordinatorCtxMgr *corecontext.ContextEngine  // liên động cửa sổ ngữ cảnh khi đổi mô hình
     askUser           *tools.AskUserTool
     writerRestore     *ctxpack.WriterRestorePack
 
     observer     *observer
-    router       *flow.Dispatcher  // 订阅 + Route + FollowUp
+    router       *flow.Dispatcher  // đăng ký + Route + FollowUp
     routerDetach func()
     usage        *UsageTracker
     usageCancel  context.CancelFunc
-    budget       *BudgetSentinel   // Host 政策组件：执行用户预算声明（等同代为 Abort），订阅先于 Dispatcher
-    notifier     *notify.Notifier  // 观察层：run_end/repeat/budget 三类告警的离屏副本，永不介入控制流
+    budget       *BudgetSentinel   // Thành phần chính sách Host: thực thi tuyên bố ngân sách người dùng (tương đương Abort thay mặt), đăng ký trước Dispatcher
+    notifier     *notify.Notifier  // Tầng quan sát: bản sao ngoài màn hình của ba loại cảnh báo run_end/repeat/budget, không bao giờ can thiệp luồng điều khiển
 
     events, streamCh, done chan ...
 
@@ -315,191 +315,191 @@ type Host struct {
 }
 ```
 
-### 7.2 公开 API
+### 7.2 API công khai
 
-**生命周期**（Coordinator 的 Run 入口）：`Start` / `StartPrepared` / `Resume` / `Continue` / `Steer` / `Abort` / `Close`
+**Vòng đời** (điểm vào Run của Điều phối viên): `Start` / `StartPrepared` / `Resume` / `Continue` / `Steer` / `Abort` / `Close`
 
-**观察通道**：`Events` / `Stream` / `Done`（清空流走 streamCh 内 sentinel）
+**Kênh quan sát**: `Events` / `Stream` / `Done` (làm rỗng luồng đi sentinel trong streamCh)
 
-**UI 聚合**：`Snapshot()` —— TUI 一次拉取所有展示数据
+**Tổng hợp UI**: `Snapshot()` — TUI kéo một lần lấy tất cả dữ liệu hiển thị
 
-**配置/扩展**：模型管理（`SwitchModel`）、外部小说反推导入（`ImportFrom`）、共创对话（`CoCreateStream`）、事件回放（`ReplayQueue`）、仿写画像（`Simulate`/`ImportSimulationProfile`）、导出（`Export`）
+**Cấu hình/Mở rộng**: Quản lý mô hình (`SwitchModel`), nhập tiểu thuyết ngoài để phân tích ngược (`ImportFrom`), hội thoại đồng sáng tác (`CoCreateStream`), phát lại sự kiện (`ReplayQueue`), phân tích hành văn mô phỏng (`Simulate`/`ImportSimulationProfile`), xuất (`Export`)
 
-无 `decideNext` `retryActiveTask` 等业务调度方法。Flow Router 是纯函数 + FollowUp 的薄组合，不持有"正在重试的任务"之类的隐式状态。
+Không có các phương thức lập lịch nghiệp vụ như `decideNext` `retryActiveTask`. Flow Router là tổ hợp mỏng hàm thuần túy + FollowUp, không giữ trạng thái ngầm như "nhiệm vụ đang thử lại".
 
-### 7.3 `waitDone` 形态
+### 7.3 Hình thái `waitDone`
 
 ```go
 func (h *Host) waitDone() {
     h.coordinator.WaitForIdle()
     h.observer.finalize()
 
-    if Phase == Complete { lifecycle=completed; 发"创作完成"事件 }
-    else if running        { lifecycle=idle;     发"Coordinator 停止 (已完成 N 章)"事件 }
+    if Phase == Complete { lifecycle=completed; phát sự kiện "sáng tác hoàn thành" }
+    else if running        { lifecycle=idle;     phát sự kiện "Điều phối viên dừng (đã hoàn thành N chương)" }
 
     select { case h.done <- struct{}{}: default: }
 }
 ```
 
-三件事：等待 idle → 切换 lifecycle → 发终态事件 + 投递 done 信号。**禁止 `Inject` / `FollowUp` / `Prompt` 出现在函数体**。LLM 跑完一次 Run 后整个 Host 进入终态。
+Ba việc: chờ idle → chuyển lifecycle → phát sự kiện trạng thái cuối + đẩy tín hiệu done. **Cấm `Inject` / `FollowUp` / `Prompt` xuất hiện trong thân hàm**. Sau khi LLM chạy xong một lần Run, toàn bộ Host vào trạng thái cuối.
 
-要再动起来只有两种方式：用户主动 `Continue`/`Start`，或重启进程走 `Resume`。
+Muốn chạy tiếp chỉ có hai cách: người dùng chủ động `Continue`/`Start`, hoặc khởi động lại tiến trình đi `Resume`.
 
-> 历史教训：曾经在此函数加过 `idleResumeCount` 自动重启 Run 的补丁。在唯一一次实际触发的 mimo 长跑里 100% 没救场，反而掩盖了 agentcore 层"thinking-only stop 消息进历史"的真因。**Host 层的"防御性重启"永远是错位修复**。详见 `feedback_no_host_resilience.md` 与 §10 第 5 条。
+> Bài học lịch sử: Đã từng thêm patch `idleResumeCount` tự động khởi động lại Run vào hàm này. Trong lần chạy dài mimo duy nhất thực sự kích hoạt, 100% không cứu được, ngược lại che đậy nguyên nhân thật ở tầng agentcore "tin nhắn thinking-only stop đi vào lịch sử". **"Khởi động lại phòng thủ" ở tầng Host luôn là sửa sai chỗ**. Xem `feedback_no_host_resilience.md` và mục 5 §10.
 
 ---
 
-## 8. 启动与恢复
+## 8. Khởi động và khôi phục
 
-### 8.1 新建
+### 8.1 Tạo mới
 
 ```
-User: "一句话需求"
+Người dùng: "yêu cầu một câu"
   → Host.Start
     → store.Progress.Init / store.Checkpoints.Reset
     → coordinator.Prompt(userPrompt) + flow.Dispatcher.Enable + Dispatch
-    → Coordinator long loop: 规划 → 写 1..N → 审阅 → done
+    → Vòng lặp dài Điều phối viên: lập kế hoạch → viết 1..N → đánh giá → done
 ```
 
-### 8.2 恢复（崩溃后重启）
+### 8.2 Khôi phục (khởi động lại sau crash)
 
 ```
-进程启动
-  → 读 Progress + 最近 Checkpoint + PendingCommit + PendingSteer
-  → buildResumePrompt → 短通告（不是 step 级指令）
+Tiến trình khởi động
+  → Đọc Progress + Checkpoint gần nhất + PendingCommit + PendingSteer
+  → buildResumePrompt → thông báo ngắn (không phải chỉ thị cấp bước)
   → coordinator.Prompt(resumePrompt) + Dispatcher.Enable + Dispatch
-  → Coordinator 按 Host 指令继续
+  → Điều phối viên tiếp tục theo chỉ thị Host
 ```
 
-Resume 用 `Prompt` 启新 Run（turn 计数重置、context 清洁），不是 `FollowUp`。具体下一步由 Flow Router 在首次 TurnEnd 后从事实层派生。
+Resume dùng `Prompt` khởi chạy Run mới (bộ đếm turn reset, ngữ cảnh sạch), không phải `FollowUp`. Bước tiếp theo cụ thể do Flow Router suy ra từ tầng dữ liệu thực tế sau TurnEnd đầu tiên.
 
-### 8.3 用户干预
+### 8.3 Can thiệp người dùng
 
-| 入口 | 前缀 | 语义 | 实现 |
+| Điểm vào | Tiền tố | Ngữ nghĩa | Triển khai |
 |---|---|---|---|
-| `Steer(text)` | `[用户干预]` | 修改/查询，需 Coordinator 裁定 | 运行中走 `Inject`；停机写 PendingSteer 到 `meta/run.json` |
-| `Continue(text)` | `[用户干预]` | 续写、停机后唤醒 | 运行中走 `FollowUp`；停机走 `Inject` 自动恢复 run |
+| `Steer(text)` | `[Người dùng can thiệp]` | Sửa đổi/truy vấn, cần Điều phối viên phán quyết | Khi đang chạy dùng `Inject`; khi dừng máy ghi PendingSteer vào `meta/run.json` |
+| `Continue(text)` | `[Người dùng can thiệp]` | Tiếp tục viết, đánh thức sau khi dừng máy | Khi đang chạy dùng `FollowUp`; khi dừng máy dùng `Inject` tự động khôi phục run |
 
-两入口统一经 `interventionMsg` helper 加 `[用户干预]` 前缀——它是 `coordinator.md` 干预分类的锚点；曾经 Continue 发裸文本会绕过分类、被误派 writer 改已写章（已修）。
+Hai điểm vào thống nhất qua helper `interventionMsg` thêm tiền tố `[Người dùng can thiệp]` — đây là neo cho phân loại can thiệp trong `coordinator.md`; trước đây Continue gửi văn bản trần sẽ bỏ qua phân loại, bị phái nhầm writer sửa chương đã viết (đã sửa).
 
-`Inject` 语义：运行中插队当前 run 队列；空闲时自动恢复 run 并注入；暂停时排队等候恢复。
+Ngữ nghĩa `Inject`: khi đang chạy chen vào hàng đợi run hiện tại; khi rảnh tự động khôi phục run và inject; khi tạm dừng xếp hàng chờ khôi phục.
 
-**长效干预的持久层**：干预分类里"仅影响后续写作的长效要求"（风格/倾向类）由 Coordinator 调 `save_directive` 落盘到 `meta/user_directives.json`（上限 20 条，add 去重 / remove 按序号），`novel_context` 注入 `working_memory.user_directives`——所有子代理每章自动看到，跨压缩、跨重启生效，不依赖 Coordinator 对话记忆与派单转达。其余三类干预出路本就落 store（篇幅→compass/outline，设定→foundation，改旧章→PendingRewrites）。走信封不走 system prompt：保护 writer 跨章 system 前缀缓存。
+**Lớp lưu trữ của can thiệp dài hạn**: "Yêu cầu dài hạn chỉ ảnh hưởng đến viết lách tiếp theo" trong phân loại can thiệp (loại phong cách/khuynh hướng) được Điều phối viên gọi `save_directive` ghi xuống `meta/user_directives.json` (tối đa 20 mục, add khử trùng lặp / remove theo số thứ tự), `novel_context` inject vào `working_memory.user_directives` — mọi agent phụ đều tự động nhìn thấy mỗi chương, có hiệu lực xuyên nén, xuyên khởi động lại, không phụ thuộc vào ký ức hội thoại và phân phối lệnh của Điều phối viên. Ba loại can thiệp còn lại bản thân đã ghi Store (độ dài → compass/outline, thiết lập → foundation, sửa chương cũ → PendingRewrites). Đi phong bì, không đi system prompt: bảo vệ cache tiền tố system xuyên chương của writer.
 
-每条指令落盘时附**下达时进度快照**（at_chapter / at_total_chapters）：指令自 at_chapter 起向后生效（editor 不追溯旧章）；万一相对式指令（"增加10章"）被误存为长效要求，读取方可据快照判定已满足而非重复执行。动作式指令的正途仍是对应路由的写时翻译（architect/editor → 大纲/compass/PendingRewrites 的绝对状态），快照是误分类时的保险。
+Mỗi chỉ thị khi ghi kèm **snapshot tiến độ lúc hạ lệnh** (at_chapter / at_total_chapters): chỉ thị có hiệu lực hướng về phía sau từ at_chapter (editor không truy hồi chương cũ); nếu chỉ thị tương đối ("tăng 10 chương") bị lưu nhầm thành yêu cầu dài hạn, người đọc có thể dựa snapshot phán định đã thỏa mãn chứ không thực thi lại. Đường chính của chỉ thị hành động vẫn là dịch thuật khi ghi theo route tương ứng (architect/editor → trạng thái tuyệt đối của đề cương/compass/PendingRewrites), snapshot là bảo hiểm khi phân loại sai.
 
 ---
 
-## 9. 目录结构
+## 9. Cấu trúc thư mục
 
 ```
 internal/
-  domain/         纯数据：Phase / FlowState / Progress / Checkpoint / Scope / Story / Plan /
-                  Review / StateChange / Phase-Flow 迁移规则
-  store/          文件系统持久化（tmp+rename + 三件套）：progress / checkpoints / outline /
+  domain/         Dữ liệu thuần túy: Phase / FlowState / Progress / Checkpoint / Scope / Story / Plan /
+                  Review / StateChange / Quy tắc chuyển tiếp Phase-Flow
+  store/          Lưu trữ hệ thống file (tmp+rename + bộ ba): progress / checkpoints / outline /
                   drafts / summaries / characters / world / signals / run_meta / runtime / session
-  tools/          11 个 Agent 工具，写类全部原子三件套 + digest 幂等 + ConcurrencySafe=false
-                  + premise_structure (save_foundation 内部用) + ask_user
-  agents/         build.go 装配 Coordinator + 三子代理；ctxpack/ Writer 上下文压缩策略
+  tools/          11 công cụ Agent, loại ghi đều có bộ ba nguyên tử + digest idempotent + ConcurrencySafe=false
+                  + premise_structure (dùng nội bộ trong save_foundation) + ask_user
+  agents/         build.go lắp ráp Điều phối viên + ba agent phụ; ctxpack/ chiến lược nén ngữ cảnh Writer
   host/           host.go + resume.go + observer.go + events.go + usage.go + usage_replay.go
                   + stream_extract.go + cocreate.go
-    flow/         router.go (纯函数 11 分支) + state.go + dispatcher.go + router_test.go
-    reminder/     stop_guard.go (Coordinator) + subagent_guards.go (CheckpointDeltaGuard ×3)
-    imp/          外部小说反推导入：split → foundation → 逐章分析
-    exp/          已完成章节导出：合并章节 → TXT / EPUB 3，路径后缀驱动；纯只读，不依赖 LLM
-  entry/          tui (Bubble Tea) / headless / startup
-  bootstrap/      config + ModelSet + provider failover + setup 向导
-  models/         OpenRouter 等公共模型注册表 + 价格刷新 (24h 磁盘缓存)
-  errs/           错误分层
-  diag/           订阅 host 事件流的只读诊断模块
-  utils/          旧架构遗留（少量解析工具，新增代码不应依赖）
+    flow/         router.go (hàm thuần túy 11 nhánh) + state.go + dispatcher.go + router_test.go
+    reminder/     stop_guard.go (Điều phối viên) + subagent_guards.go (CheckpointDeltaGuard ×3)
+    imp/          Nhập phân tích ngược tiểu thuyết ngoài: split → foundation → phân tích từng chương
+    exp/          Xuất các chương đã hoàn thành: ghép chương → TXT / EPUB 3, hậu tố đường dẫn điều khiển; chỉ đọc thuần, không phụ thuộc LLM
+  entry/          tui (Bubble Tea) / chế độ không giao diện / startup
+  bootstrap/      config + ModelSet + provider failover + wizard thiết lập
+  models/         Danh bạ mô hình công khai OpenRouter v.v. + làm mới giá (cache đĩa 24h)
+  errs/           Phân tầng lỗi
+  diag/           Module chẩn đoán chỉ đọc đăng ký luồng sự kiện host
+  utils/          Di tích kiến trúc cũ (một ít công cụ phân tích, code mới không nên phụ thuộc)
 
 assets/
-  prompts/        coordinator (~55 行) / architect-short|long / writer / editor / import-* / simulation-*
-  references/     写作技巧 + 体裁模板 + 长篇规划等
-  styles/         默认/奇幻/言情/悬疑
+  prompts/        coordinator (~55 dòng) / architect-short|long / writer / editor / import-* / simulation-*
+  references/     Kỹ thuật viết + mẫu thể loại + lập kế hoạch tiểu thuyết dài v.v.
+  styles/         mặc định/fantasy/romance/suspense
 
-../agentcore     通用 Agent 框架（go.work 兄弟目录，可加通用能力，不加业务）
-../litellm       LLM 网关
+../agentcore     Framework Agent dùng chung (thư mục anh em go.work, có thể thêm khả năng chung, không thêm nghiệp vụ)
+../litellm       Gateway LLM
 ```
 
-### 9.1 演进里程碑
+### 9.1 Các mốc tiến hóa
 
-| 时间 | 重构 | 净效果 |
+| Thời gian | Tái cấu trúc | Hiệu quả ròng |
 |---|---|---|
-| 2026-04-10 | `internal/orchestrator/` (6342 行) → `host/` + `agents/` | 运行时核心 -74% |
-| 2026-04-20 | Hybrid Coordinator：新建 `host/flow/`，`reminder/` 瘦身，`coordinator.md` 88 行 → 45 行 | 路由错误率趋近 0 |
-| 2026-05-02 | agentcore `WithMaxToolErrors(0)` + `isReasoningOnlyStopAssistant`；`StreamIdleTimeout=5min`；删除 `idleResumeCount` 续跑补丁 | mimo / 慢思考流式跑通 |
-| 2026-06-05 | 滚动规划闭环（`expand_arc`/`append_volume`）+ `/import` 反推分层续写 + 用户篇幅干预 | 200+ 章首次跑通 |
+| 2026-04-10 | `internal/orchestrator/` (6342 dòng) → `host/` + `agents/` | Lõi runtime -74% |
+| 2026-04-20 | Hybrid Coordinator: tạo mới `host/flow/`, `reminder/` gọn lại, `coordinator.md` 88 dòng → 45 dòng | Tỉ lệ lỗi định tuyến tiệm cận 0 |
+| 2026-05-02 | agentcore `WithMaxToolErrors(0)` + `isReasoningOnlyStopAssistant`; `StreamIdleTimeout=5min`; xóa patch tiếp tục chạy `idleResumeCount` | mimo / streaming suy nghĩ chậm chạy thông |
+| 2026-06-05 | Vòng kín kế hoạch cuộn (`expand_arc`/`append_volume`) + `/import` phân tích ngược phân tầng tiếp tục viết + can thiệp độ dài người dùng | 200+ chương chạy thông lần đầu |
 
-实测：hy3-preview free 12 章 / 73 分钟、mimo-v2.5-pro 10 章 / 8.4 万字（章均 8400），均一次跑完；长篇 gpt-5.4《凡骨》235 章 / 127 万字 / 章均 5407，滚动规划闭环跑通。
-
----
-
-## 10. 明确不做的事
-
-违反即代表架构偏离。
-
-1. **不引入 Task / Job / WorkItem 概念**。UI 显示的"当前任务"是事件流投影，不是事实。
-2. **不引入 Dispatcher / Scheduler / Ready Evaluator**。决策权在 Coordinator LLM 与工具层。
-3. **不做 `idle_dispatch` 类的"空闲续跑"机制**。Coordinator Run 结束 = Host 发 done。
-4. **不在 Host 绕过 Coordinator 直接调 SubAgent**。Flow Router 通过 `coordinator.FollowUp` 让 Coordinator 生成 tool_call。Resume 用 `Prompt` 启新 Run。
-5. **不在 Host 为 LLM 异常停机加自动续跑补丁**。Run 结束 = Host 进入终态。曾经的 `idleResumeCount` 已删除（详见 §7.3、`feedback_no_host_resilience.md`）。
-6. **不基于"tool exec end"推断任务完成**。完成的唯一证据是 checkpoint 写入。
-7. **不做 WorkflowInstance / TaskInstance / Command + Apply 等四层模型**。事实层只有 Progress + Checkpoint + Artifact 三类。
-8. **不支持并行 task**。单活跃 Coordinator Run，单本书串行推进。多本小说请用多进程。
-9. **不在工具层做 LLM 调用**（除 Agent 工具自身）。纯 IO + 校验 + 幂等。
-10. **不让 UI 直接读 Store**。只能订阅事件或读 Host `Snapshot()`。
-11. **不用信号文件做 IPC**。Host 直读 Progress + Checkpoint + 分层大纲，`flow.Route` 从事实派生指令是合理的垂类路由。
-12. **不写 Host 端的 Flow 状态机**。Flow 标签只由工具更新，Router 只读不写。
-13. **不为"LLM 幻觉"写兜底硬编码**。优化 prompt、改进工具返回值结构、让 `novel_context` 更清楚地呈现事实——而不是 Host 强制改流程。
-14. **不让 diag / 观察层介入控制流**。诊断只读、只产 Finding 与脱敏导出；自动修复 / 续跑 / 改流程一律不做（见 §2.3 观察者纪律）。
-15. **预算与告警不进 Route/工具层，告警不进控制流**。`BudgetSentinel` 是 Host 政策组件（执行用户预先签署的 Abort，不评估模型行为）；`notify` 是纯观察（不重试、不改派、不停机）。`flow.Route` 保持纯函数，对两者无感知。
+Thực đo: hy3-preview free 12 chương / 73 phút, mimo-v2.5-pro 10 chương / 84.000 chữ (trung bình chương 8400), đều chạy xong một lần; tiểu thuyết dài gpt-5.4 《凡骨》 235 chương / 1.270.000 chữ / trung bình chương 5407, vòng kín kế hoạch cuộn chạy thông.
 
 ---
 
-## 11. 验证策略
+## 10. Những việc rõ ràng không làm
 
-### 11.1 稳定性场景
+Vi phạm tức là kiến trúc đã lệch hướng.
 
-- **A 长跑**：80~200 章一次跑完，Phase=complete。允许 provider failover、tools transient 重试；禁止 Host 续跑或 Coordinator 多次 Run。
-- **B 崩溃恢复**：第 N 章 draft 后 / commit 前 kill 进程 → Resume → 从 consistency_check 继续，不重写已落盘 draft。`checkpoints.jsonl` 无重复 step。
-- **C provider 抖动**：模拟间歇 503 → litellm failover；LLM 主循环无感知。
-- **D 用户干预**：运行时 Steer → Coordinator 下一 turn 处理；停机后 Steer → 下次 Resume prompt 包含。
-
-### 11.2 合规性（可写成 linter / test）
-
-- `internal/host/` 不允许 `import "internal/scheduler"` 之类调度包
-- `host.go` 的生命周期 API 数量稳定；新增公开方法只能是"扩展入口"类（共创/导入/模型管理）
-- `waitDone` 函数体内不允许 `coordinator.Inject` / `FollowUp` / `Prompt`
-- `recovery` 相关代码只能出现在 `host/resume.go`
-- `flow.Route` 必须是纯函数：禁止读 Store / 任何 IO
-
-### 11.3 质量迭代
-
-改 `writer.md` 立刻产生风格变化；新增 editor 评审维度向后兼容（save_review 接收结构化 JSON）。新增一篇参考资料 md 需三处接线（`tools.References` 字段 + `assets/load.go` 的 `loadReferences` + `novel_context.go` 的 `writerReferences`/`architectReferences` 注入），不是放进目录即自动加载——`References` 是显式字段映射，便于按角色/章节裁剪。
-
-**全书级风格统计（`internal/stylestat`）**：弧内评审窗口对"句式 tic 章均几十次、章末形态同构、跨章逐字复读"这类全书级固化天然失明——单章看每处都正常。`novel_context` 章节路径对全部已完成章节跑确定性统计（句式模式类/近窗高频短语/跨章重复句/章末形态/标题格式混用），注入 `episodic_memory.style_stats`：editor 在 aesthetic 维度按数字裁定，writer 据此自避免。**统计归代码，裁定归 LLM**——阈值不写死在代码里，数字是否成病由模型按题材判断。与其并列的产品底线 `rules.Lint`（markdown 残留/非中文片段）在 commit_chapter 始终执行，仅返事实。
+1. **Không đưa vào khái niệm Task / Job / WorkItem**. "Nhiệm vụ hiện tại" hiển thị trên UI là chiếu từ luồng sự kiện, không phải dữ liệu thực tế.
+2. **Không đưa vào Dispatcher / Scheduler / Ready Evaluator**. Quyền quyết định nằm ở Coordinator LLM và tầng công cụ.
+3. **Không làm cơ chế "tiếp tục chạy khi rảnh" dạng `idle_dispatch`**. Coordinator Run kết thúc = Host phát done.
+4. **Không để Host bỏ qua Điều phối viên gọi trực tiếp SubAgent**. Flow Router thông qua `coordinator.FollowUp` để Điều phối viên tạo tool_call. Resume dùng `Prompt` khởi chạy Run mới.
+5. **Không thêm patch tự động tiếp tục chạy ở Host khi LLM dừng bất thường**. Run kết thúc = Host vào trạng thái cuối. `idleResumeCount` trước đây đã bị xóa (xem §7.3, `feedback_no_host_resilience.md`).
+6. **Không suy ra nhiệm vụ hoàn thành dựa trên "tool exec end"**. Bằng chứng duy nhất của hoàn thành là checkpoint được ghi vào.
+7. **Không làm mô hình bốn tầng WorkflowInstance / TaskInstance / Command + Apply v.v.**. Tầng dữ liệu thực tế chỉ có ba loại Progress + Checkpoint + Artifact.
+8. **Không hỗ trợ task song song**. Một Coordinator Run hoạt động duy nhất, một cuốn sách tiến hành tuần tự. Nhiều tiểu thuyết hãy dùng nhiều tiến trình.
+9. **Không thực hiện gọi LLM ở tầng công cụ** (ngoại trừ bản thân công cụ Agent). Chỉ thuần IO + kiểm tra + idempotent.
+10. **Không để UI đọc trực tiếp Store**. Chỉ được đăng ký sự kiện hoặc đọc `Snapshot()` của Host.
+11. **Không dùng file tín hiệu làm IPC**. Host đọc thẳng Progress + Checkpoint + đề cương phân tầng, `flow.Route` suy ra chỉ thị từ dữ liệu thực tế là định tuyến chuyên ngành hợp lý.
+12. **Không viết state machine Flow ở phía Host**. Nhãn Flow chỉ được cập nhật bởi công cụ, Router chỉ đọc không ghi.
+13. **Không viết hard-code dự phòng cho "ảo giác LLM"**. Tối ưu prompt, cải thiện cấu trúc giá trị trả về của công cụ, làm `novel_context` trình bày dữ liệu thực tế rõ hơn — thay vì Host cưỡng chế thay đổi quy trình.
+14. **Không để diag / tầng quan sát can thiệp luồng điều khiển**. Chẩn đoán chỉ đọc, chỉ tạo Finding và xuất khử nhạy cảm; tự động sửa / tiếp tục chạy / thay đổi quy trình đều không làm (xem §2.3 kỷ luật quan sát).
+15. **Ngân sách và cảnh báo không vào Route/tầng công cụ, cảnh báo không vào luồng điều khiển**. `BudgetSentinel` là thành phần chính sách Host (thực thi Abort người dùng đã ký trước, không đánh giá hành vi mô hình); `notify` là thuần quan sát (không thử lại, không thay đổi phát, không dừng máy). `flow.Route` giữ là hàm thuần túy, không nhận thức về cả hai.
 
 ---
 
-## 12. 总结
+## 11. Chiến lược xác minh
 
-> **让 LLM 在一次 Run 里把一本小说写完，Host 只做启动 / 恢复 / 路由 / 观察，事实记录由工具原子落盘，决策权尽量留给模型。**
+### 11.1 Kịch bản ổn định
 
-没有 workflow engine，没有 task queue，没有 dispatcher，没有 scheduler。有的只是：
+- **A Chạy dài**: 80~200 chương chạy xong một lần, Phase=complete. Cho phép provider failover, tools transient thử lại; cấm Host tiếp tục chạy hoặc Điều phối viên chạy nhiều lần Run.
+- **B Khôi phục crash**: Kill tiến trình sau draft chương N / trước commit → Resume → tiếp tục từ consistency_check, không viết lại bản nháp đã ghi xuống. `checkpoints.jsonl` không có bước trùng lặp.
+- **C Provider bị nhiễu**: Mô phỏng 503 gián đoạn → litellm failover; vòng lặp chính LLM không nhận thức.
+- **D Can thiệp người dùng**: Steer khi đang chạy → Điều phối viên xử lý ở turn tiếp theo; Steer khi dừng máy → resume prompt lần sau bao gồm.
 
-- 一个 100_000 turn 的 Coordinator
-- 三类职能子代理（context 与模型独立）
-- 11 个原子工具
-- 一个 jsonl checkpoint 文件
-- ~860 行的 Host 外壳
-- ~150 行的 Flow Router 纯函数（11 分支 + 单测）
+### 11.2 Tuân thủ (có thể viết thành linter / test)
 
-每一行 Host 业务代码都是在跟模型升级对冲的押注。**最小 Host、最肥 Prompt（质量层）、最强工具** 让架构每年自动变得更好——Coordinator 决策更准、Writer 写得更好、Editor 评审更准、Architect 规划更精，全是直接换模型架构无感的收益。
+- `internal/host/` không được phép `import "internal/scheduler"` hay các package lập lịch tương tự
+- Số lượng API vòng đời trong `host.go` ổn định; phương thức công khai mới thêm chỉ được là loại "điểm vào mở rộng" (đồng sáng tác/nhập/quản lý mô hình)
+- Trong thân hàm `waitDone` không được phép có `coordinator.Inject` / `FollowUp` / `Prompt`
+- Code liên quan `recovery` chỉ được xuất hiện trong `host/resume.go`
+- `flow.Route` phải là hàm thuần túy: cấm đọc Store / bất kỳ IO nào
 
-反过来在 Host 里硬编码"上次 review 说要重写第 3、5 章"或"连续 3 次没进展就停机"这种规则，模型升级会让它变成**负收益**：本应 LLM 做的判断变冗余、保护逻辑变误报。**最糟的是没人敢删——删了就等于"相信模型"，心理上的包袱比代码更难清理**。这种代码留下越多，未来重构成本越高。
+### 11.3 Cải tiến chất lượng
 
-**扩展性来自对的扩展点**：改风格 → 改 prompt；新评审维度 → 改 prompt；新题材 → 加参考资料；新子代理类型 → 加一行 SubAgentConfig；并行多本小说 → 多进程。
+Sửa `writer.md` ngay lập tức tạo ra thay đổi phong cách; thêm tiêu chí đánh giá editor mới tương thích ngược (save_review nhận JSON có cấu trúc). Thêm một file md tài liệu tham khảo mới cần nối ba chỗ (`tools.References` field + `loadReferences` trong `assets/load.go` + inject `writerReferences`/`architectReferences` trong `novel_context.go`), không phải đặt vào thư mục là tự động tải — `References` là ánh xạ field tường minh, thuận tiện cắt giảm theo vai trò/chương.
 
-唯一的纪律：**有人想"让 Host 更聪明一点"时，先问"为什么不让 LLM 更聪明一点"**。这个问题回答不出"Host 必须"的理由，就不要往 Host 里加代码。
+**Thống kê phong cách toàn sách (`internal/stylestat`)**: Cửa sổ đánh giá trong cung tự nhiên mù quáng với các vấn đề cố định cấp toàn sách như "tic câu trung bình vài chục lần mỗi chương, hình thái cuối chương đồng cấu, sao chép từng chữ xuyên chương" — xem từng chương một thì mỗi chỗ đều bình thường. `novel_context` chạy thống kê xác định trên toàn bộ chương đã hoàn thành (loại mẫu câu / cụm từ tần suất cao trong cửa sổ gần / câu lặp xuyên chương / hình thái cuối chương / tiêu đề dùng hỗn hợp format), inject vào `episodic_memory.style_stats`: editor phán quyết theo số liệu ở tiêu chí aesthetic, writer dựa đó tự tránh. **Thống kê thuộc code, phán quyết thuộc LLM** — ngưỡng không hard-code trong code, số liệu có thành vấn đề hay không do mô hình phán quyết theo thể loại. Song song với đó, `rules.Lint` là đáy sản phẩm (markdown còn sót / đoạn phi tiếng Trung) luôn thực thi trong commit_chapter, chỉ trả về dữ liệu thực tế.
+
+---
+
+## 12. Tóm tắt
+
+> **Để LLM hoàn thành một cuốn tiểu thuyết trong một lần Run, Host chỉ đảm nhận khởi động / khôi phục / định tuyến / quan sát, ghi chép dữ liệu thực tế được công cụ ghi xuống nguyên tử, quyền quyết định được giữ lại tối đa cho mô hình.**
+
+Không có workflow engine, không có task queue, không có Dispatcher, không có scheduler. Chỉ có:
+
+- Một Điều phối viên 100_000 turn
+- Ba loại agent phụ chức năng (ngữ cảnh và mô hình độc lập)
+- 11 công cụ nguyên tử
+- Một file checkpoint jsonl
+- Vỏ Host ~860 dòng
+- Hàm thuần túy Flow Router ~150 dòng (11 nhánh + unit test)
+
+Mỗi dòng code nghiệp vụ Host là một cược đối chọi với việc nâng cấp mô hình. **Host tối giản, Prompt (tầng chất lượng) tối đa, Công cụ mạnh nhất** khiến kiến trúc tự động tốt hơn mỗi năm — Điều phối viên quyết định chính xác hơn, Người viết viết tốt hơn, Biên tập viên đánh giá chính xác hơn, Kiến trúc sư lập kế hoạch tinh tế hơn, tất cả đều là lợi ích trực tiếp khi đổi mô hình mà kiến trúc không cần biết.
+
+Ngược lại, hard-code trong Host các quy tắc như "lần review trước nói cần viết lại chương 3, 5" hay "liên tiếp 3 lần không tiến triển thì dừng máy", mô hình nâng cấp sẽ biến chúng thành **lợi ích âm**: phán quyết đáng lẽ LLM làm trở thành thừa, logic bảo vệ trở thành báo lỗi. **Tệ nhất là không ai dám xóa — xóa đi tức là "tin vào mô hình", gánh nặng tâm lý còn khó dọn hơn code**. Code kiểu này để lại càng nhiều, chi phí tái cấu trúc trong tương lai càng cao.
+
+**Khả năng mở rộng đến từ điểm mở rộng đúng**: Đổi phong cách → sửa prompt; tiêu chí đánh giá mới → sửa prompt; thể loại mới → thêm tài liệu tham khảo; loại agent phụ mới → thêm một dòng SubAgentConfig; song song nhiều tiểu thuyết → nhiều tiến trình.
+
+Kỷ luật duy nhất: **Khi có người muốn "làm Host thông minh hơn một chút", hãy hỏi trước "tại sao không làm LLM thông minh hơn một chút"**. Câu hỏi này không trả lời được lý do "Host phải làm", thì đừng thêm code vào Host.

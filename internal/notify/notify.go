@@ -1,8 +1,10 @@
-// Package notify 提供无人值守告警通道。
+// Package notify cung cấp kênh cảnh báo không cần người trực.
 //
-// 合宪定位（architecture.md §2.3）：纯观察层动作——告警永不介入控制流
-// （不重试、不改派、不停机），只是把 TUI 内已有的事件"喊"到屏幕之外。
-// Send 异步执行、永不阻塞 Host、失败只记 slog。
+// Định vị kiến trúc (architecture.md §2.3): hành động thuần quan sát —
+// cảnh báo không bao giờ can thiệp luồng điều khiển
+// (không thử lại, không điều phối lại, không dừng hệ thống),
+// chỉ "la to" các sự kiện đã có trong TUI ra ngoài màn hình.
+// Send thực thi bất đồng bộ, không bao giờ chặn Host, thất bại chỉ ghi slog.
 package notify
 
 import (
@@ -16,7 +18,7 @@ import (
 	"time"
 )
 
-// Notification 一条告警的全部事实。
+// Notification chứa toàn bộ thông tin của một cảnh báo.
 type Notification struct {
 	Kind  string `json:"kind"`  // run_end / repeat / budget
 	Level string `json:"level"` // info / warn / error
@@ -24,15 +26,17 @@ type Notification struct {
 	Body  string `json:"body"`
 }
 
-// Notifier 按配置分发通知。零值不可用，必须经 New 创建；nil 安全（Send noop）。
+// Notifier phân phối thông báo theo cấu hình. Giá trị zero không dùng được,
+// phải tạo qua New; an toàn với nil (Send là noop).
 type Notifier struct {
-	command string          // 非空时替代 system 通道（手机推送走这里）
-	events  map[string]bool // nil = 全部 kind 放行
+	command string          // khi không rỗng thay thế kênh system (push điện thoại đi qua đây)
+	events  map[string]bool // nil = cho qua tất cả kind
 	timeout time.Duration
 }
 
-// New 创建 Notifier。command 为空走内置 system 通道（macOS osascript /
-// Linux notify-send，找不到命令静默降级为仅 slog）；events 非空时只放行列出的 kind。
+// New tạo Notifier. Nếu command rỗng thì dùng kênh system tích hợp (macOS osascript /
+// Linux notify-send; không tìm thấy lệnh thì giảm cấp im lặng thành chỉ ghi slog);
+// nếu events không rỗng thì chỉ cho qua các kind được liệt kê.
 func New(command string, events []string) *Notifier {
 	n := &Notifier{command: strings.TrimSpace(command), timeout: 10 * time.Second}
 	if len(events) > 0 {
@@ -44,7 +48,7 @@ func New(command string, events []string) *Notifier {
 	return n
 }
 
-// Send 异步发送一条通知。过滤、执行、失败处理全部不影响调用方。
+// Send gửi một thông báo bất đồng bộ. Lọc, thực thi, xử lý thất bại đều không ảnh hưởng bên gọi.
 func (n *Notifier) Send(nt Notification) {
 	if !n.allows(nt.Kind) {
 		return
@@ -52,7 +56,7 @@ func (n *Notifier) Send(nt Notification) {
 	go n.deliver(nt)
 }
 
-// allows 返回该 kind 是否放行（nil Notifier / 未列入 events 时拦截）。
+// allows trả về liệu kind có được cho qua không (Notifier nil / không có trong events thì chặn).
 func (n *Notifier) allows(kind string) bool {
 	if n == nil {
 		return false
@@ -60,7 +64,7 @@ func (n *Notifier) allows(kind string) bool {
 	return n.events == nil || n.events[kind]
 }
 
-// deliver 同步执行一次发送（goroutine 内运行；测试可直接调用以同步断言）。
+// deliver thực thi một lần gửi đồng bộ (chạy bên trong goroutine; test có thể gọi trực tiếp để assert đồng bộ).
 func (n *Notifier) deliver(nt Notification) {
 	defer func() { recover() }()
 	ctx, cancel := context.WithTimeout(context.Background(), n.timeout)
@@ -73,12 +77,14 @@ func (n *Notifier) deliver(nt Notification) {
 		err = runSystem(ctx, nt)
 	}
 	if err != nil {
-		slog.Warn("通知发送失败", "module", "notify", "kind", nt.Kind, "err", err)
+		slog.Warn("Gửi thông báo thất bại", "module", "notify", "kind", nt.Kind, "err", err)
 	}
 }
 
-// runCommand 执行用户配置的命令：字段经环境变量传入（一行 curl 零依赖、无注入
-// 风险），完整 JSON 同时写 stdin（复杂分发场景自行解析）。超时由 ctx 强杀。
+// runCommand thực thi lệnh do người dùng cấu hình: các trường được truyền qua biến môi trường
+// (một dòng curl không cần phụ thuộc ngoài, không có rủi ro injection),
+// JSON đầy đủ đồng thời ghi vào stdin (tình huống phân phối phức tạp tự phân tích).
+// Timeout được ctx cưỡng chế dừng.
 func runCommand(ctx context.Context, command string, nt Notification) error {
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
 	cmd.Env = append(os.Environ(),
@@ -92,7 +98,8 @@ func runCommand(ctx context.Context, command string, nt Notification) error {
 	return cmd.Run()
 }
 
-// runSystem 内置桌面通知：只覆盖"人在电脑旁"的场景，找不到命令静默降级。
+// runSystem thông báo desktop tích hợp: chỉ áp dụng cho tình huống "người ngồi trước máy tính",
+// không tìm thấy lệnh thì giảm cấp im lặng.
 func runSystem(ctx context.Context, nt Notification) error {
 	switch runtime.GOOS {
 	case "darwin":
@@ -100,17 +107,17 @@ func runSystem(ctx context.Context, nt Notification) error {
 		return exec.CommandContext(ctx, "osascript", "-e", script).Run()
 	case "linux":
 		if _, err := exec.LookPath("notify-send"); err != nil {
-			slog.Info("通知降级为日志（无 notify-send）", "module", "notify", "title", nt.Title, "body", nt.Body)
+			slog.Info("Thông báo giảm cấp thành log (không có notify-send)", "module", "notify", "title", nt.Title, "body", nt.Body)
 			return nil
 		}
 		return exec.CommandContext(ctx, "notify-send", nt.Title, nt.Body).Run()
 	default:
-		slog.Info("通知降级为日志（平台无 system 通道）", "module", "notify", "title", nt.Title, "body", nt.Body)
+		slog.Info("Thông báo giảm cấp thành log (nền tảng không có kênh system)", "module", "notify", "title", nt.Title, "body", nt.Body)
 		return nil
 	}
 }
 
-// appleScriptString 把任意文本包装为 AppleScript 字符串字面量。
+// appleScriptString bọc văn bản tùy ý thành chuỗi literal của AppleScript.
 func appleScriptString(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)

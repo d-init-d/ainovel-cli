@@ -8,7 +8,7 @@ import (
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
-// helper：构造一个处于 Writing 阶段、分层模式的 Progress。
+// helper: tạo một Progress đang ở giai đoạn Writing, chế độ phân lớp.
 func writingProgress(completed []int, flow domain.FlowState) *domain.Progress {
 	return &domain.Progress{
 		Phase:             domain.PhaseWriting,
@@ -199,7 +199,7 @@ func TestRoute_NormalContinue(t *testing.T) {
 }
 
 func TestRoute_ArcEndNonLayeredSkipsBoundary(t *testing.T) {
-	// 非 Layered 模式即使 ArcBoundary 非 nil 也不走弧末分支
+	// Chế độ không phải Layered: dù ArcBoundary khác nil vẫn không đi vào nhánh cuối cung truyện
 	p := &domain.Progress{
 		Phase:             domain.PhaseWriting,
 		Flow:              domain.FlowWriting,
@@ -237,27 +237,27 @@ func contains(s, sub string) bool {
 }
 
 func TestDispatcher_TrackRepeat(t *testing.T) {
-	// 不需要真实 coordinator / store；trackRepeat 只读自己的缓存。
+	// Không cần coordinator / store thật; trackRepeat chỉ đọc cache nội bộ.
 	d := &Dispatcher{}
 	inst := &Instruction{Agent: "writer", Task: "写第 5 章", Reason: "续写"}
 	if got := d.trackRepeat(inst); got != 1 {
-		t.Fatalf("首次下达应计 1，got %d", got)
+		t.Fatalf("lần đầu hạ lệnh phải tính 1, got %d", got)
 	}
 	if got := d.trackRepeat(inst); got != 2 {
-		t.Fatalf("同 Agent+Task 重复下达应计 2，got %d", got)
+		t.Fatalf("cùng Agent+Task lặp lại phải tính 2, got %d", got)
 	}
-	// Reason 不同、Agent+Task 相同时视为同一指令继续累计
+	// Reason khác nhau, Agent+Task giống nhau vẫn coi là cùng lệnh và tiếp tục cộng dồn
 	sameTaskDiffReason := &Instruction{Agent: "writer", Task: "写第 5 章", Reason: "弧末后继续"}
 	if got := d.trackRepeat(sameTaskDiffReason); got != 3 {
-		t.Fatalf("仅 Reason 不同应视为重复累计到 3，got %d", got)
+		t.Fatalf("chỉ khác Reason vẫn tính là lặp, cộng dồn lên 3, got %d", got)
 	}
 	other := &Instruction{Agent: "writer", Task: "写第 6 章", Reason: "续写"}
 	if got := d.trackRepeat(other); got != 1 {
-		t.Fatalf("Task 变更后应重置为 1，got %d", got)
+		t.Fatalf("Task thay đổi phải reset về 1, got %d", got)
 	}
 	d.ResetRepeat()
 	if got := d.trackRepeat(other); got != 1 {
-		t.Fatalf("ResetRepeat 后首次应计 1，got %d", got)
+		t.Fatalf("sau ResetRepeat lần đầu phải tính 1, got %d", got)
 	}
 }
 
@@ -265,12 +265,12 @@ func TestFormatDispatchMessage_RepeatNotice(t *testing.T) {
 	inst := &Instruction{Agent: "writer", Task: "写第 5 章", Reason: "续写"}
 	first := formatDispatchMessage(inst, 1)
 	if first != FormatMessage(inst) {
-		t.Fatalf("首次下达不应附加重复注记: %s", first)
+		t.Fatalf("lần đầu hạ lệnh không được đính kèm ghi chú lặp: %s", first)
 	}
 	third := formatDispatchMessage(inst, 3)
 	for _, want := range []string{"第 3 次下达", "路由事实未变化", "novel_context", "改派"} {
 		if !contains(third, want) {
-			t.Errorf("重复注记缺少 %q: %s", want, third)
+			t.Errorf("ghi chú lặp thiếu %q: %s", want, third)
 		}
 	}
 }
@@ -284,18 +284,18 @@ func TestDispatcher_OnRepeatFiresOnceAtThreshold(t *testing.T) {
 
 	inst := &Instruction{Agent: "writer", Task: "写第 5 章"}
 	for range 6 {
-		d.trackRepeat(inst) // n=1..6：只在 n==3 时回调一次
+		d.trackRepeat(inst) // n=1..6: chỉ callback đúng một lần khi n==3
 	}
 	if len(fired) != 1 || fired[0] != fmt.Sprintf("writer|写第 5 章|%d", repeatNotifyAt) {
-		t.Fatalf("应恰好在第 %d 次触发一次，got %v", repeatNotifyAt, fired)
+		t.Fatalf("phải trigger đúng một lần tại lần thứ %d, got %v", repeatNotifyAt, fired)
 	}
 
-	// 键变更后重新武装：换任务再连续 3 次 → 再触发一次
+	// Sau khi đổi key sẽ được tái vũ trang: đổi task rồi lặp tiếp 3 lần → trigger thêm một lần
 	other := &Instruction{Agent: "writer", Task: "写第 6 章"}
 	for range 3 {
 		d.trackRepeat(other)
 	}
 	if len(fired) != 2 {
-		t.Fatalf("键变更后应重新武装，got %v", fired)
+		t.Fatalf("sau khi đổi key phải tái vũ trang, got %v", fired)
 	}
 }

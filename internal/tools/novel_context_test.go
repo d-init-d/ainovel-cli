@@ -532,16 +532,18 @@ func TestContextToolSelectedMemoryRecallsStoryThreadsAndReviewLessons(t *testing
 	}
 }
 
-// 久挂未回收的伏笔即使与当前章关键词无关，也应被账龄回填进 story_threads——
-// 这正是相关性召回的盲区（独自悬挂太久、却没在本章撞上关键词的那根线）。
-// 近期埋下的伏笔（账龄 < 阈值）不应被误标为"未回收"。
+// Phục bút treo quá lâu chưa thu hồi, dù không liên quan đến từ khóa chương hiện tại,
+// vẫn phải được bù vào story_threads theo tuổi tài khoản —
+// đây chính là điểm mù của cơ chế gọi lại theo độ liên quan
+// (những sợi treo riêng quá lâu nhưng không va chạm từ khóa ở chương này).
+// Phục bút mới đặt gần đây (tuổi tài khoản < ngưỡng) không được gắn nhầm nhãn "chưa thu hồi".
 func TestContextToolSelectedMemorySurfacesAgingForeshadow(t *testing.T) {
 	dir := t.TempDir()
 	s := store.NewStore(dir)
 	if err := s.Init(); err != nil {
 		t.Fatalf("Init: %v", err)
 	}
-	// 当前章主题与所有伏笔都不沾边，确保相关性召回为空，只剩账龄回填生效。
+	// Chủ đề chương hiện tại không liên quan đến bất kỳ phục bút nào, đảm bảo gọi lại theo liên quan trả về rỗng, chỉ còn bù theo tuổi tài khoản có hiệu lực.
 	if err := s.Outline.SaveOutline([]domain.OutlineEntry{
 		{Chapter: 50, Title: "瘟疫", CoreEvent: "林砚在城南医馆救治瘟疫病患", Scenes: []string{"熬药", "封锁街巷"}},
 	}); err != nil {
@@ -550,7 +552,7 @@ func TestContextToolSelectedMemorySurfacesAgingForeshadow(t *testing.T) {
 	if err := s.Progress.Init("test", 60); err != nil {
 		t.Fatalf("InitProgress: %v", err)
 	}
-	// 6 条满足召回阈值；前两条账龄 ≥30（久挂），后四条账龄 <30（近期）。
+	// 6 mục đạt ngưỡng gọi lại; hai mục đầu có tuổi tài khoản ≥30 (treo lâu), bốn mục sau có tuổi tài khoản <30 (gần đây).
 	if err := s.World.SaveForeshadowLedger([]domain.ForeshadowEntry{
 		{ID: "ancient_seal", Description: "上古封印的裂隙", PlantedAt: 3, Status: "planted"},
 		{ID: "lost_bloodline", Description: "主角失落的血脉来历", PlantedAt: 5, Status: "advanced"},
@@ -581,7 +583,7 @@ func TestContextToolSelectedMemorySurfacesAgingForeshadow(t *testing.T) {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 
-	// 两条久挂伏笔应被回填，且带"未回收"账龄标注。
+	// Hai phục bút treo lâu phải được bù vào, kèm chú thích tuổi tài khoản "未回收".
 	if !containsRecallSummary(payload.Selected.StoryThreads, "上古封印的裂隙") {
 		t.Fatalf("expected aging foreshadow to surface despite no relevance, got %+v", payload.Selected.StoryThreads)
 	}
@@ -591,7 +593,7 @@ func TestContextToolSelectedMemorySurfacesAgingForeshadow(t *testing.T) {
 	if !containsRecallSummary(payload.Selected.StoryThreads, "未回收") {
 		t.Fatalf("expected aging item to carry overdue annotation, got %+v", payload.Selected.StoryThreads)
 	}
-	// 近期伏笔（账龄 <30 且不相关）不应被回填。
+	// Phục bút gần đây (tuổi tài khoản <30 và không liên quan) không được bù vào.
 	if containsRecallSummary(payload.Selected.StoryThreads, "昨夜集市的口角") {
 		t.Fatalf("recent foreshadow must not be labeled overdue, got %+v", payload.Selected.StoryThreads)
 	}
@@ -876,7 +878,7 @@ func TestContextToolInjectsUserDirectivesOnBothPaths(t *testing.T) {
 			t.Errorf("[%s] unexpected directive entry: %v", name, entry)
 		}
 		if _, hasCreatedAt := entry["created_at"]; hasCreatedAt {
-			t.Errorf("[%s] created_at 是审计信息，不应进 LLM", name)
+			t.Errorf("[%s] created_at là thông tin kiểm toán, không được truyền vào LLM", name)
 		}
 	}
 }
@@ -905,7 +907,7 @@ func TestContextToolInjectsEmptyUserDirectives(t *testing.T) {
 	if !ok {
 		t.Fatal("missing working_memory")
 	}
-	// 空列表也注入 []（字段稳定，同 user_rules 先例），不能是 null/缺失
+	// Danh sách rỗng cũng inject [] (trường ổn định, theo tiền lệ user_rules), không được là null/thiếu
 	directives, ok := working["user_directives"].([]any)
 	if !ok {
 		t.Fatalf("expected stable empty array, got %T", working["user_directives"])

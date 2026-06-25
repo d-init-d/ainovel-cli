@@ -21,24 +21,26 @@ import (
 	"github.com/voocel/ainovel-cli/internal/tools"
 )
 
-// logRulesLoaded 在装配期打印规则加载实况：本书规则目录、实际读到的来源、字数检查生效值。
-// 规则文件放错路径会被 loader 静默跳过、来源又不进 LLM（仅 /diag 面板可见），放错零反馈是
-// 用户排查的最大障碍。这一行启动日志让"路径错 / 字数没写进 front matter"一眼可见。
+// logRulesLoaded in ra thực trạng tải rules trong giai đoạn khởi động: thư mục rules của sách,
+// nguồn thực tế đọc được, giá trị kiểm tra số từ có hiệu lực.
+// File rules đặt sai đường dẫn sẽ bị loader bỏ qua thầm lặng, nguồn cũng không vào LLM
+// (chỉ thấy được ở panel /diag), đặt sai mà không có phản hồi là trở ngại lớn nhất
+// khi người dùng gỡ lỗi. Dòng log khởi động này giúp phát hiện ngay "sai đường dẫn / số từ chưa ghi vào front matter".
 func logRulesLoaded(opts rules.LoadOptions) {
 	b := rules.Merge(rules.Load(opts))
-	words := "未设置（不做字数检查）"
+	words := "chưa đặt (không kiểm tra số từ)"
 	if w := b.Structured.ChapterWords; w != nil {
 		words = fmt.Sprintf("%d-%d", w.Min, w.Max)
 	}
-	slog.Info("规则加载",
-		"本书规则目录", opts.ProjectRulesDir,
-		"已加载来源", b.Sources,
-		"章节字数", words)
+	slog.Info("tải rules",
+		"thư mục rules sách", opts.ProjectRulesDir,
+		"nguồn đã tải", b.Sources,
+		"số từ mỗi chương", words)
 }
 
-// agentToRole 把 subagent name 归一为 ModelSet 认得的 role 名。
-// architect_short / architect_long 都共用同一个 architect role 配置。
-// 跟 host.agentRoleName 同义，因为 build 与 host 互不依赖故各持一份。
+// agentToRole chuẩn hóa tên subagent thành tên role mà ModelSet nhận ra.
+// architect_short / architect_long đều dùng chung cấu hình role architect.
+// Tương đương với host.agentRoleName; vì build và host độc lập nhau nên mỗi bên giữ một bản.
 func agentToRole(name string) string {
 	if strings.HasPrefix(name, "architect_") {
 		return "architect"
@@ -46,25 +48,29 @@ func agentToRole(name string) string {
 	return name
 }
 
-// subagentMaxRetries 给所有 SubAgentConfig 与 Coordinator 统一的 LLM retry 上限。
-// 退避策略：指数 1s/2s/4s/8s/16s（受 maxDelay 上限约束），优先服从 server Retry-After。
-// 配合 ToolsAreIdempotent=true 让 stream-idle / 503 / 短暂网络抖动这类 retryable
-// 错误能在 subagent 层就近重试，而不是把整个 subagent 抛回 coordinator 重派发。
-// 项目铁律一保证写类工具走 checkpoint+digest 幂等，重试是安全的。
+// subagentMaxRetries là giới hạn retry LLM thống nhất cho tất cả SubAgentConfig và Coordinator.
+// Chiến lược lùi: lũy thừa 1s/2s/4s/8s/16s (bị giới hạn bởi maxDelay), ưu tiên tuân theo
+// server Retry-After. Kết hợp ToolsAreIdempotent=true để các lỗi retryable như stream-idle /
+// 503 / mạng chập chờn có thể được retry ngay tại lớp subagent thay vì ném toàn bộ
+// subagent về coordinator để phân phát lại.
+// Nguyên tắc sắt #1 đảm bảo các tool ghi dùng checkpoint+digest bất biến, retry là an toàn.
 const subagentMaxRetries = 5
 
-// UsageRecorder 是 BuildCoordinator 可选的用量回调；签名与 OnMessage 一致，
-// 每条 agent 消息都会调一次，由 Host 层负责聚合。nil 表示不追踪。
+// UsageRecorder là callback tùy chọn của BuildCoordinator để ghi lại mức sử dụng;
+// chữ ký giống OnMessage, được gọi mỗi lần có một tin nhắn agent,
+// tầng Host chịu trách nhiệm tổng hợp. nil nghĩa là không theo dõi.
 type UsageRecorder func(agentName string, msg agentcore.AgentMessage)
 
-// ApplyThinking 把某具体角色的思考强度应用到 live agent（运行时 /model 调整用）。
-// coordinator → Agent.SetThinkingLevel；architect → 两个 architect_* 子代理；
-// writer/editor → 对应子代理。空 level = 沿用模型/provider 默认。其它 role 名忽略。
+// ApplyThinking áp dụng cường độ thinking của một role cụ thể lên agent đang chạy
+// (dùng khi điều chỉnh /model lúc runtime).
+// coordinator → Agent.SetThinkingLevel; architect → hai subagent architect_*;
+// writer/editor → subagent tương ứng. level rỗng = dùng mặc định của model/provider.
+// Các tên role khác bị bỏ qua.
 type ApplyThinking func(role string, level agentcore.ThinkingLevel)
 
-// ParseThinkingLevel 把配置字符串转 agentcore.ThinkingLevel。
-// "" 合法（= 不覆盖/继承）；其余须是 off/minimal/low/medium/high/xhigh 之一，
-// 否则返回 error（启动时降级当空并 warn，运行时把 error 回显给用户）。
+// ParseThinkingLevel chuyển chuỗi cấu hình thành agentcore.ThinkingLevel.
+// "" hợp lệ (= không ghi đè/kế thừa); các giá trị còn lại phải là off/minimal/low/medium/high/xhigh,
+// nếu không sẽ trả về error (lúc khởi động hạ cấp thành rỗng và warn, lúc runtime hiển thị error cho người dùng).
 func ParseThinkingLevel(s string) (agentcore.ThinkingLevel, error) {
 	lv := agentcore.ThinkingLevel(strings.ToLower(strings.TrimSpace(s)))
 	switch lv {
@@ -72,26 +78,29 @@ func ParseThinkingLevel(s string) (agentcore.ThinkingLevel, error) {
 		agentcore.ThinkingMedium, agentcore.ThinkingHigh, agentcore.ThinkingXHigh:
 		return lv, nil
 	default:
-		return "", fmt.Errorf("无效思考强度 %q（可选：off/minimal/low/medium/high/xhigh）", s)
+		return "", fmt.Errorf("cường độ thinking không hợp lệ %q (các giá trị: off/minimal/low/medium/high/xhigh)", s)
 	}
 }
 
-// roleThinking 解析某角色生效的思考强度；非法值降级为空（不覆盖）并 warn。
+// roleThinking phân tích cường độ thinking hiệu lực của một role; giá trị không hợp lệ
+// sẽ bị hạ cấp thành rỗng (không ghi đè) và ghi warn.
 func roleThinking(cfg bootstrap.Config, role string) agentcore.ThinkingLevel {
 	lv, err := ParseThinkingLevel(cfg.ResolveThinking(role))
 	if err != nil {
-		slog.Warn("忽略无效思考强度配置", "module", "agent", "role", role, "err", err)
+		slog.Warn("bỏ qua cấu hình cường độ thinking không hợp lệ", "module", "agent", "role", role, "err", err)
 		return ""
 	}
 	return lv
 }
 
-// BuildCoordinator 组装 Coordinator Agent 及其 SubAgent。
-// 返回 Agent、AskUserTool、WriterRestorePack、Coordinator 的 ContextEngine 引用，
-// 以及 ApplyThinking 闭包——Host 层 /model 切换时需要直接调 SetContextWindow +
-// SetReserveTokens 联动新模型的窗口（writer/architect/editor 走 ContextManagerFactory
-// 自动重建，不需要 ref；只有常驻的 coordinator 需要），并通过 ApplyThinking 联动各角色
-// 思考强度。Host 层通过 Agent.Subscribe 获取事件流,不再需要 emit 回调。
+// BuildCoordinator lắp ráp Coordinator Agent cùng các SubAgent của nó.
+// Trả về Agent, AskUserTool, WriterRestorePack, tham chiếu ContextEngine của Coordinator,
+// và closure ApplyThinking — tầng Host cần gọi trực tiếp SetContextWindow +
+// SetReserveTokens khi chuyển /model để liên động cửa sổ ngữ cảnh của model mới
+// (writer/architect/editor dùng ContextManagerFactory tự xây lại, không cần ref;
+// chỉ coordinator thường trực mới cần), và liên động cường độ thinking các role
+// thông qua ApplyThinking. Tầng Host nhận luồng sự kiện qua Agent.Subscribe,
+// không cần callback emit nữa.
 func BuildCoordinator(
 	cfg bootstrap.Config,
 	store *store.Store,
@@ -99,7 +108,7 @@ func BuildCoordinator(
 	bundle assets.Bundle,
 	recordUsage UsageRecorder,
 ) (*agentcore.Agent, *tools.AskUserTool, *ctxpack.WriterRestorePack, *corecontext.ContextEngine, ApplyThinking) {
-	// 共享工具
+	// Công cụ dùng chung
 	rulesOpts := rules.DefaultOptions(bundle.RulesFS)
 	logRulesLoaded(rulesOpts)
 	contextTool := tools.NewContextTool(store, bundle.References, cfg.Style, rulesOpts)
@@ -127,9 +136,9 @@ func BuildCoordinator(
 		tools.NewSaveVolumeSummaryTool(store),
 	}
 
-	// Provider failover 只记日志,不通知宿主
+	// Provider failover chỉ ghi log, không thông báo tầng host
 	reportFailover := func(ev bootstrap.FailoverEvent) {
-		slog.Warn("provider 切换",
+		slog.Warn("chuyển nhà cung cấp",
 			"module", "agent",
 			"role", ev.Role,
 			"reason", ev.Reason,
@@ -144,18 +153,20 @@ func BuildCoordinator(
 	editorModel := models.ForRoleWithFailover("editor", reportFailover)
 	coordinatorModel := models.ForRoleWithFailover("coordinator", reportFailover)
 
-	// Coordinator 的 ContextManager 在 Agent 构造时一次性生成，按启动模型解析。
-	// 运行中 /model 切换到更小窗口的模型时，建议用户显式配置 context_window 兜底。
+	// ContextManager của Coordinator được tạo một lần khi xây dựng Agent, dựa trên model khởi động.
+	// Khi chuyển /model sang model có cửa sổ nhỏ hơn lúc runtime, nên cấu hình tường minh context_window để dự phòng.
 	_, coordinatorModelName, _ := models.CurrentSelection("coordinator")
 	coordinatorContextWindow, coordinatorSource := cfg.ResolveContextWindow(coordinatorModelName)
-	// Writer 的 ContextManager 由工厂每次调用重建，窗口随模型 swap 动态跟随（见下方工厂）。
+	// ContextManager của Writer được xây lại mỗi lần gọi bởi factory, cửa sổ ngữ cảnh tự động
+	// theo model swap (xem factory bên dưới).
 	_, writerModelName, _ := models.CurrentSelection("writer")
 	writerContextWindow, writerSource := cfg.ResolveContextWindow(writerModelName)
 	bootstrap.LogContextWindowChoice("coordinator", coordinatorModelName, coordinatorContextWindow, coordinatorSource)
 	bootstrap.LogContextWindowChoice("writer", writerModelName, writerContextWindow, writerSource)
 
-	// modelLookup 写入 session 时给每条 assistant 消息附 _meta:{provider,model}，
-	// 让 replay 不再依赖"当前 ModelSet"来反推历史 cost，运行中切换模型也能精确算。
+	// modelLookup gắn _meta:{provider,model} vào mỗi tin nhắn assistant khi ghi session,
+	// để replay không phụ thuộc vào "ModelSet hiện tại" để suy ngược cost lịch sử;
+	// chuyển model lúc runtime cũng tính toán chính xác.
 	modelLookup := func(agentName string) (string, string) {
 		role := agentToRole(agentName)
 		provider, name, _ := models.CurrentSelection(role)
@@ -182,7 +193,7 @@ func BuildCoordinator(
 	architectThinking := roleThinking(cfg, "architect")
 	architectShort := subagent.Config{
 		Name:               "architect_short",
-		Description:        "短篇规划师：为单卷、单冲突、高密度故事生成紧凑设定与扁平大纲",
+		Description:        "Kiến trúc sư truyện ngắn: tạo thiết định súc tích và đề cương phẳng cho truyện đơn tập, xung đột đơn, mật độ cao",
 		Model:              architectModel,
 		SystemPrompt:       bundle.Prompts.ArchitectShort,
 		Tools:              architectTools,
@@ -199,7 +210,7 @@ func BuildCoordinator(
 	}
 	architectLong := subagent.Config{
 		Name:               "architect_long",
-		Description:        "长篇规划师：为连载型、可持续升级的故事生成分层设定与卷弧大纲",
+		Description:        "Kiến trúc sư truyện dài: tạo thiết định phân tầng và đề cương cung truyện cho truyện đăng nhiều kỳ, có thể mở rộng liên tục",
 		Model:              architectModel,
 		SystemPrompt:       bundle.Prompts.ArchitectLong,
 		Tools:              architectTools,
@@ -230,7 +241,7 @@ func BuildCoordinator(
 
 	writer := subagent.Config{
 		Name:               "writer",
-		Description:        "创作者：自主完成一章的构思、写作、自审和提交",
+		Description:        "Người viết: tự chủ hoàn thành việc phác thảo ý tưởng, viết, tự kiểm duyệt và lưu chương cho một chương",
 		Model:              writerModel,
 		SystemPrompt:       writerPrompt,
 		Tools:              writerTools,
@@ -244,8 +255,8 @@ func BuildCoordinator(
 			return reminder.NewWriterStopGuard(store)
 		},
 		ContextManagerFactory: func(model agentcore.ChatModel) agentcore.ContextManager {
-			// 每次 subagent(writer) 调用都会重建，从当前 runModel 读取最新模型名。
-			// /model 切换 writer 后下一章自动用新窗口。
+			// Được xây lại mỗi lần gọi subagent(writer), đọc tên model mới nhất từ runModel hiện tại.
+			// Chuyển writer qua /model, chương tiếp theo tự động dùng cửa sổ ngữ cảnh mới.
 			window, _ := cfg.ResolveContextWindow(bootstrap.ModelName(model))
 			return newContextManager(contextManagerConfig{
 				Model:            model,
@@ -275,7 +286,7 @@ func BuildCoordinator(
 
 	editor := subagent.Config{
 		Name:               "editor",
-		Description:        "审阅者：阅读原文，从结构和审美两个层面发现问题",
+		Description:        "Biên tập viên: đọc bản gốc, phát hiện vấn đề từ cả hai góc độ cấu trúc và thẩm mỹ",
 		Model:              editorModel,
 		SystemPrompt:       bundle.Prompts.Editor,
 		Tools:              editorTools,
@@ -284,10 +295,11 @@ func BuildCoordinator(
 		ThinkingLevel:      roleThinking(cfg, "editor"),
 		ToolsAreIdempotent: true,
 		OnMessage:          onMsg,
-		// 仅摘要类终态产物命中即停；save_review 不再硬停——StopAfterTool 退出会绕过
-		// StopGuard（agentcore loop.go），若 save_review 硬停，"被派生成弧摘要却先复核"
-		// 的 editor 会在 save_review 处被砍断、够不到 save_arc_summary。评审/摘要任务的
-		// 收尾改由任务感知的 NewEditorStopGuard 把关。
+		// Chỉ dừng khi đạt sản phẩm trạng thái cuối là loại tóm tắt; save_review không còn dừng cứng —
+		// thoát qua StopAfterTool sẽ bỏ qua StopGuard (agentcore loop.go); nếu save_review dừng cứng,
+		// editor được phân công "tóm tắt cung truyện nhưng phải kiểm duyệt trước" sẽ bị cắt ngang
+		// tại save_review, không đến được save_arc_summary. Việc kết thúc nhiệm vụ kiểm duyệt/tóm tắt
+		// được giao cho NewEditorStopGuard nhận biết nhiệm vụ xử lý.
 		StopAfterToolResult: func(toolName string, _ json.RawMessage) bool {
 			return toolName == "save_arc_summary" || toolName == "save_volume_summary"
 		},
@@ -314,20 +326,22 @@ func BuildCoordinator(
 		agentcore.WithMaxTurns(100_000),
 		agentcore.WithOnMessage(coordinatorOnMessage),
 		agentcore.WithToolsAreIdempotent(true),
-		// subagent 是流程主通道；真实错误应显式返回给 Host，而不是在单次 run 内永久禁用工具。
+		// subagent là kênh chính của luồng xử lý; lỗi thực sự nên được trả về tường minh cho Host,
+		// không nên vô hiệu hóa vĩnh viễn tool trong một lần chạy.
 		agentcore.WithMaxToolErrors(0),
 		agentcore.WithMaxRetries(subagentMaxRetries),
 		agentcore.WithContextManager(coordinatorEngine),
 		agentcore.WithStopGuard(reminder.NewStopGuard(store, nil)),
-		// phase=complete 时硬拦截 subagent 派发，防止 Writer 死循环。
+		// Chặn cứng việc phân phát subagent khi phase=complete, ngăn Writer lặp vô tận.
 		agentcore.WithToolGate(completePhaseGate(store)),
 	)
-	// Coordinator 思考强度：无条件应用解析结果。未配置时为空（不发 thinking，用 provider
-	// 默认），与各子代理（Config.ThinkingLevel 默认空）一致——避免覆盖 agentcore 默认
-	// ThinkingLow 而对所有 provider 强制发 low（含会被强制开思考的 GLM/Ollama）。
+	// Cường độ thinking của Coordinator: áp dụng kết quả phân tích vô điều kiện. Khi chưa cấu hình
+	// thì là rỗng (không gửi thinking, dùng mặc định provider), nhất quán với các subagent
+	// (Config.ThinkingLevel mặc định rỗng) — tránh ghi đè ThinkingLow mặc định của agentcore
+	// mà ép tất cả provider gửi low (kể cả GLM/Ollama vốn bị ép bật thinking).
 	agent.SetThinkingLevel(roleThinking(cfg, "coordinator"))
 
-	// 运行时联动各角色思考强度：coordinator 走 Agent，子代理走 subagentTool override。
+	// Liên động cường độ thinking các role lúc runtime: coordinator qua Agent, subagent qua subagentTool override.
 	applyThinking := func(role string, level agentcore.ThinkingLevel) {
 		switch role {
 		case "coordinator":
@@ -343,20 +357,21 @@ func BuildCoordinator(
 	return agent, askUser, restore, coordinatorEngine, applyThinking
 }
 
-// completePhaseGate 返回一个 ToolGate：phase=complete 时拒绝所有 subagent 派发。
-// 防止 Coordinator LLM 在书完成后仍调用 Writer/Architect 导致死循环。
+// completePhaseGate trả về một ToolGate: từ chối tất cả phân phát subagent khi phase=complete.
+// Ngăn Coordinator LLM tiếp tục gọi Writer/Architect sau khi sách đã hoàn thành, tránh vòng lặp vô tận.
 func completePhaseGate(st *store.Store) agentcore.ToolGate {
 	return func(_ context.Context, req agentcore.GateRequest) (*agentcore.GateDecision, error) {
 		if req.Call.Name != "subagent" {
 			return nil, nil
 		}
-		// fail-open：Load 出错或 progress 为空时一律放行，不因瞬时读错误卡死正常派发。
-		// 唯一代价是 complete 期恰逢读失败时死锁可能复现（概率极低，可接受）。
+		// fail-open: khi Load lỗi hoặc progress rỗng thì cho qua hết, không để lỗi đọc thoáng qua
+		// làm kẹt việc phân phát bình thường. Chi phí duy nhất là nếu đọc thất bại đúng lúc phase=complete
+		// thì deadlock có thể tái xuất hiện (xác suất cực thấp, chấp nhận được).
 		progress, _ := st.Progress.Load()
 		if progress != nil && progress.Phase == domain.PhaseComplete {
 			return &agentcore.GateDecision{
 				Allowed: false,
-				Reason:  "全书已完成（phase=complete），不能直接派子代理。若用户要返工已写章节，请先调用 reopen_book(chapters=[...]) 把书重新打开进入返工态（之后会自动派 writer 重写）；若用户要新增剧情，告知需新建项目。",
+				Reason:  "Toàn bộ sách đã hoàn thành (phase=complete), không thể trực tiếp phân phát subagent. Nếu người dùng muốn làm lại chương đã viết, hãy gọi reopen_book(chapters=[...]) để mở lại sách sang trạng thái làm lại (sau đó sẽ tự động phân phát writer viết lại); nếu người dùng muốn thêm cốt truyện mới, hãy thông báo cần tạo dự án mới.",
 			}, nil
 		}
 		return nil, nil

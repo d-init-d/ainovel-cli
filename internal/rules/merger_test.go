@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// makeParsed 是测试辅助：构造一个 Parsed，省略冗长字段。
+// makeParsed là hàm hỗ trợ test: tạo một Parsed, bỏ qua các trường dài dòng.
 func makeParsed(source string, kind SourceKind, s Structured, pref string) Parsed {
 	return Parsed{Source: source, Kind: kind, Structured: s, Preference: pref}
 }
@@ -22,8 +22,8 @@ func TestMerge_Empty(t *testing.T) {
 }
 
 func TestMerge_NearestWinsScalar(t *testing.T) {
-	// default 说 chapter_words: 3000-6000，project 说 chapter_words: 4000-8000
-	// 期望：项目优先
+	// default khai báo chapter_words: 3000-6000, project khai báo chapter_words: 4000-8000
+	// Kỳ vọng: dự án được ưu tiên
 	layers := []Parsed{
 		makeParsed("default.md", SourceDefault, Structured{
 			ChapterWords: &WordRange{Min: 3000, Max: 6000},
@@ -36,14 +36,14 @@ func TestMerge_NearestWinsScalar(t *testing.T) {
 	if b.Structured.ChapterWords == nil || b.Structured.ChapterWords.Min != 4000 || b.Structured.ChapterWords.Max != 8000 {
 		t.Errorf("project should win, got %+v", b.Structured.ChapterWords)
 	}
-	// 一致性冲突应被识别
+	// Xung đột nhất quán phải được nhận diện
 	if !hasConflict(b.Conflicts, ConflictFieldConflict, "chapter_words") {
 		t.Errorf("expected field_conflict for chapter_words, got %+v", b.Conflicts)
 	}
 }
 
 func TestMerge_NoConflictWhenEqual(t *testing.T) {
-	// 两层都声明同一字段，但值完全一致 → 不算冲突
+	// Hai tầng đều khai báo cùng một trường, nhưng giá trị hoàn toàn giống nhau → không tính là xung đột
 	layers := []Parsed{
 		makeParsed("default.md", SourceDefault, Structured{
 			ChapterWords:   &WordRange{Min: 3000, Max: 6000},
@@ -63,7 +63,7 @@ func TestMerge_NoConflictWhenEqual(t *testing.T) {
 }
 
 func TestMerge_NearestWinsList(t *testing.T) {
-	// global ["——"], project ["（"]，期望项目生效，且报冲突
+	// global ["——"], project ["（"], kỳ vọng project có hiệu lực và báo xung đột
 	layers := []Parsed{
 		makeParsed("global.md", SourceGlobal, Structured{
 			ForbiddenChars: []string{"——"},
@@ -82,7 +82,7 @@ func TestMerge_NearestWinsList(t *testing.T) {
 }
 
 func TestMerge_FatigueWordsMergeByKey(t *testing.T) {
-	// genre fatigue {不禁:1}; project fatigue {竟然:2} → 按词合并，避免用户只新增一词时丢失默认规则
+	// genre fatigue {不禁:1}; project fatigue {竟然:2} → gộp theo từ khóa, tránh mất quy tắc mặc định khi người dùng chỉ thêm một từ
 	layers := []Parsed{
 		makeParsed("default.md", SourceDefault, Structured{
 			FatigueWords: map[string]int{"不禁": 1},
@@ -102,7 +102,7 @@ func TestMerge_FatigueWordsMergeByKey(t *testing.T) {
 }
 
 func TestMerge_FatigueWordsNearestWinsSameKey(t *testing.T) {
-	// 同一疲劳词多来源声明不同阈值 → 就近优先，并只针对该词报冲突
+	// Cùng một từ sáo rỗng được nhiều nguồn khai báo với ngưỡng khác nhau → ưu tiên gần nhất, chỉ báo xung đột cho từ đó
 	layers := []Parsed{
 		makeParsed("default.md", SourceDefault, Structured{
 			FatigueWords: map[string]int{"不禁": 1, "然而": 2},
@@ -122,7 +122,7 @@ func TestMerge_FatigueWordsNearestWinsSameKey(t *testing.T) {
 }
 
 func TestMerge_PreservesUntouchedFields(t *testing.T) {
-	// 低优先级声明字段 A；高优先级只声明字段 B → A 应保留
+	// Ưu tiên thấp khai báo trường A; ưu tiên cao chỉ khai báo trường B → A phải được giữ lại
 	layers := []Parsed{
 		makeParsed("default.md", SourceDefault, Structured{
 			ForbiddenChars: []string{"——"},
@@ -142,23 +142,23 @@ func TestMerge_PreservesUntouchedFields(t *testing.T) {
 
 func TestMerge_MarkdownConcatenated(t *testing.T) {
 	layers := []Parsed{
-		makeParsed("default.md", SourceDefault, Structured{}, "默认偏好正文"),
-		makeParsed("project.md", SourceProject, Structured{}, "项目偏好正文"),
+		makeParsed("default.md", SourceDefault, Structured{}, "Nội dung ưu tiên mặc định"),
+		makeParsed("project.md", SourceProject, Structured{}, "Nội dung ưu tiên dự án"),
 	}
 	b := Merge(layers)
-	if !strings.Contains(b.Preferences, "默认偏好正文") {
+	if !strings.Contains(b.Preferences, "Nội dung ưu tiên mặc định") {
 		t.Errorf("default body missing: %q", b.Preferences)
 	}
-	if !strings.Contains(b.Preferences, "项目偏好正文") {
+	if !strings.Contains(b.Preferences, "Nội dung ưu tiên dự án") {
 		t.Errorf("project body missing: %q", b.Preferences)
 	}
-	// 顺序：default 在前，project 在后
-	di := strings.Index(b.Preferences, "默认偏好正文")
-	pi := strings.Index(b.Preferences, "项目偏好正文")
+	// Thứ tự: default trước, project sau
+	di := strings.Index(b.Preferences, "Nội dung ưu tiên mặc định")
+	pi := strings.Index(b.Preferences, "Nội dung ưu tiên dự án")
 	if di >= pi {
 		t.Errorf("default body should appear before project body; default@%d project@%d", di, pi)
 	}
-	// 来源标题
+	// Tiêu đề nguồn
 	if !strings.Contains(b.Preferences, "[default] default.md") {
 		t.Errorf("source header for default missing: %q", b.Preferences)
 	}
@@ -170,19 +170,19 @@ func TestMerge_MarkdownConcatenated(t *testing.T) {
 func TestMerge_SkipsEmptyBody(t *testing.T) {
 	layers := []Parsed{
 		makeParsed("default.md", SourceDefault, Structured{}, "   "),
-		makeParsed("project.md", SourceProject, Structured{}, "项目正文"),
+		makeParsed("project.md", SourceProject, Structured{}, "Nội dung dự án"),
 	}
 	b := Merge(layers)
 	if strings.Contains(b.Preferences, "[default]") {
 		t.Errorf("empty body should not emit source header, got %q", b.Preferences)
 	}
-	if !strings.Contains(b.Preferences, "项目正文") {
+	if !strings.Contains(b.Preferences, "Nội dung dự án") {
 		t.Errorf("project body missing: %q", b.Preferences)
 	}
 }
 
 func TestMerge_PropagatesParsedConflicts(t *testing.T) {
-	// 单文件已有解析期 conflict（如 unknown field），merger 应原样汇总
+	// Một file đã có xung đột từ giai đoạn phân tích (ví dụ: trường không xác định), merger phải tổng hợp nguyên vẹn
 	parsed := Parsed{
 		Source: "project.md",
 		Kind:   SourceProject,
@@ -190,7 +190,7 @@ func TestMerge_PropagatesParsedConflicts(t *testing.T) {
 			Source: "project.md",
 			Kind:   ConflictUnknownField,
 			Field:  "secret_x",
-			Detail: "未知",
+			Detail: "không xác định",
 		}},
 	}
 	b := Merge([]Parsed{parsed})
@@ -212,7 +212,7 @@ func TestMerge_AllSourcesInList(t *testing.T) {
 	}
 }
 
-// hasConflict 检查 conflicts 中是否存在指定 (Kind, Field) 的条目。
+// hasConflict kiểm tra xem trong conflicts có tồn tại mục với (Kind, Field) chỉ định không.
 func hasConflict(conflicts []Conflict, kind ConflictKind, field string) bool {
 	for _, c := range conflicts {
 		if c.Kind == kind && c.Field == field {

@@ -10,10 +10,10 @@ import (
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
-// newFlagTestHost 造一个最小 Host，只够驱动 cocreating 标记状态机与并发守卫。
-// emitEvent 用 recover + 非阻塞 select，缓冲 events 通道即可，无需 coordinator/observer。
-// PauseForCoCreate 的运行态分支会调 coordinator.Abort（复用已验证的 Esc 暂停路径），
-// 不在此单测；这里只覆盖不依赖 coordinator 的非运行态与标记/守卫逻辑。
+// newFlagTestHost tạo một Host tối giản, đủ để chạy máy trạng thái cờ cocreating và bảo vệ đồng thời.
+// emitEvent dùng recover + select không chặn, chỉ cần buffer kênh events, không cần coordinator/observer.
+// Nhánh trạng thái đang chạy của PauseForCoCreate sẽ gọi coordinator.Abort (tái dùng đường dừng Esc đã xác minh),
+// không kiểm tra ở đây; chỉ bao phủ trạng thái không chạy và logic cờ/bảo vệ không phụ thuộc coordinator.
 func newFlagTestHost(lc lifecycle, cocreating bool) *Host {
 	return &Host{
 		lifecycle:  lc,
@@ -25,30 +25,30 @@ func newFlagTestHost(lc lifecycle, cocreating bool) *Host {
 func TestPauseForCoCreate_NonRunningSetsFlag(t *testing.T) {
 	h := newFlagTestHost(lifecycleIdle, false)
 	if !h.PauseForCoCreate() {
-		t.Fatal("idle 态应允许进入阶段共创")
+		t.Fatal("trạng thái idle nên cho phép vào đồng sáng tạo theo giai đoạn")
 	}
 	if !h.cocreating {
-		t.Error("进入后 cocreating 应为 true")
+		t.Error("sau khi vào, cocreating phải là true")
 	}
 	if h.lifecycle != lifecycleIdle {
-		t.Errorf("非运行态进入不应改 lifecycle，得 %s", h.lifecycle)
+		t.Errorf("vào ở trạng thái không chạy không được thay đổi lifecycle, nhận %s", h.lifecycle)
 	}
 }
 
 func TestPauseForCoCreate_RejectsCompleted(t *testing.T) {
 	h := newFlagTestHost(lifecycleCompleted, false)
 	if h.PauseForCoCreate() {
-		t.Error("全书完成后不应允许进入阶段共创")
+		t.Error("sau khi hoàn thành toàn bộ truyện không nên cho phép vào đồng sáng tạo theo giai đoạn")
 	}
 	if h.cocreating {
-		t.Error("拒绝后不应置位 cocreating")
+		t.Error("sau khi từ chối không được đặt cờ cocreating")
 	}
 }
 
 func TestPauseForCoCreate_RejectsReentrant(t *testing.T) {
 	h := newFlagTestHost(lifecyclePaused, true)
 	if h.PauseForCoCreate() {
-		t.Error("已在共创中应拒绝重入")
+		t.Error("đang trong đồng sáng tạo phải từ chối vào lại")
 	}
 }
 
@@ -56,28 +56,28 @@ func TestCancelCoCreate_ClearsFlag(t *testing.T) {
 	h := newFlagTestHost(lifecyclePaused, true)
 	h.CancelCoCreate()
 	if h.cocreating {
-		t.Error("取消后 cocreating 应清空")
+		t.Error("sau khi hủy, cocreating phải được xóa")
 	}
 	if h.lifecycle != lifecyclePaused {
-		t.Errorf("取消不应改 lifecycle，得 %s", h.lifecycle)
+		t.Errorf("hủy không được thay đổi lifecycle, nhận %s", h.lifecycle)
 	}
 }
 
 func TestCancelCoCreate_NoopWhenNotCocreating(t *testing.T) {
 	h := newFlagTestHost(lifecycleRunning, false)
-	h.CancelCoCreate() // 不应 panic，不应改状态
+	h.CancelCoCreate() // không được panic, không được thay đổi trạng thái
 	if h.cocreating || h.lifecycle != lifecycleRunning {
-		t.Error("非共创态 CancelCoCreate 应为 no-op")
+		t.Error("CancelCoCreate khi không trong đồng sáng tạo phải là no-op")
 	}
 }
 
 func TestResumeFromCoCreate_RejectsEmptyDraft(t *testing.T) {
 	h := newFlagTestHost(lifecyclePaused, true)
 	if err := h.ResumeFromCoCreate("   "); err == nil {
-		t.Fatal("空 draft 应报错")
+		t.Fatal("bản nháp rỗng phải báo lỗi")
 	}
 	if !h.cocreating {
-		t.Error("空 draft 在清标记前返回，cocreating 应保持 true")
+		t.Error("bản nháp rỗng trả về trước khi xóa cờ, cocreating phải giữ true")
 	}
 }
 
@@ -85,7 +85,7 @@ func TestResumeFromCoCreate_RejectsWhenNotCocreating(t *testing.T) {
 	h := newFlagTestHost(lifecyclePaused, false)
 	err := h.ResumeFromCoCreate("## 后续走向\n- 进入第二卷")
 	if err == nil || !strings.Contains(err.Error(), "not in co-create") {
-		t.Fatalf("非共创态应报 not in co-create，得 %v", err)
+		t.Fatalf("khi không trong đồng sáng tạo phải báo not in co-create, nhận %v", err)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestGuardExclusive(t *testing.T) {
 		name       string
 		lc         lifecycle
 		cocreating bool
-		wantErr    string // 空=期望放行
+		wantErr    string // rỗng = mong muốn cho qua
 	}{
 		{"running", lifecycleRunning, false, "运行中"},
 		{"cocreating", lifecyclePaused, true, "阶段共创"},
@@ -107,51 +107,51 @@ func TestGuardExclusive(t *testing.T) {
 			err := h.guardExclusive("导入")
 			if c.wantErr == "" {
 				if err != nil {
-					t.Fatalf("应放行，得 %v", err)
+					t.Fatalf("nên cho qua, nhận %v", err)
 				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Fatalf("应含 %q，得 %v", c.wantErr, err)
+				t.Fatalf("phải chứa %q, nhận %v", c.wantErr, err)
 			}
 			if !strings.Contains(err.Error(), "导入") {
-				t.Errorf("错误文案应带 action %q，得 %v", "导入", err)
+				t.Errorf("thông báo lỗi phải có action %q, nhận %v", "导入", err)
 			}
 		})
 	}
 }
 
-// TestStageCoCreate_OccupancyBlocksConcurrentEntries 验证共创窗口内独占性入口全部被堵：
-// import/start/resume/continue 在 cocreating 期间都应被拒，补上 paused 期只查 ==running 的缺口。
+// TestStageCoCreate_OccupancyBlocksConcurrentEntries kiểm tra tính độc quyền của tất cả các điểm vào trong cửa sổ đồng sáng tạo:
+// import/start/resume/continue đều phải bị từ chối trong khi cocreating, bù đắp khoảng trống chỉ kiểm tra ==running khi ở trạng thái paused.
 func TestStageCoCreate_OccupancyBlocksConcurrentEntries(t *testing.T) {
 	h := newFlagTestHost(lifecycleIdle, false)
 	if !h.PauseForCoCreate() {
-		t.Fatal("进入阶段共创失败")
+		t.Fatal("vào đồng sáng tạo theo giai đoạn thất bại")
 	}
 
 	if _, err := h.ImportFrom(context.Background(), imp.Options{}); err == nil {
-		t.Error("共创窗口内 ImportFrom 应被拒")
+		t.Error("ImportFrom trong cửa sổ đồng sáng tạo phải bị từ chối")
 	}
 	if err := h.StartPrepared("写个新故事"); err == nil {
-		t.Error("共创窗口内 StartPrepared 应被拒")
+		t.Error("StartPrepared trong cửa sổ đồng sáng tạo phải bị từ chối")
 	}
 	if _, err := h.Resume(); err == nil {
-		t.Error("共创窗口内 Resume 应被拒")
+		t.Error("Resume trong cửa sổ đồng sáng tạo phải bị từ chối")
 	}
 	if err := h.Continue("继续写"); err == nil {
-		t.Error("共创窗口内 Continue 应被拒")
+		t.Error("Continue trong cửa sổ đồng sáng tạo phải bị từ chối")
 	}
 
-	// 退出共创后占用解除（这里走 Cancel；Resume 注入路径需 coordinator，归集成验证）
+	// sau khi thoát đồng sáng tạo, khóa chiếm dụng được giải phóng (đây đi qua Cancel; đường inject Resume cần coordinator, để xác minh tích hợp)
 	h.CancelCoCreate()
 	if h.cocreating {
-		t.Fatal("退出后占用标记应解除")
+		t.Fatal("sau khi thoát, cờ chiếm dụng phải được xóa")
 	}
 }
 
 func TestBuildStoryStateSummary_NilStore(t *testing.T) {
 	if got := buildStoryStateSummary(nil); got != "" {
-		t.Errorf("nil store 应返回空串，得 %q", got)
+		t.Errorf("nil store phải trả về chuỗi rỗng, nhận %q", got)
 	}
 }
 
@@ -181,7 +181,7 @@ func TestBuildStoryStateSummary_Populated(t *testing.T) {
 	got := buildStoryStateSummary(st)
 	for _, want := range []string{"影之诗", "已完成 3 章", "下一章为第 4 章", "主角登临绝巅", "师门血仇未报", "预计 4-6 卷"} {
 		if !strings.Contains(got, want) {
-			t.Errorf("摘要应含 %q，实际:\n%s", want, got)
+			t.Errorf("tóm tắt phải chứa %q, thực tế:\n%s", want, got)
 		}
 	}
 }

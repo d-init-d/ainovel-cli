@@ -213,7 +213,7 @@ func TestSplitText_FullWidthSpace(t *testing.T) {
 	if got[0].Title != "风起" {
 		t.Errorf("ch1 title: %q", got[0].Title)
 	}
-	if got[1].Title != "第2章" { // 仅尾随全角空格 → 回退占位标题
+	if got[1].Title != "第2章" { // chỉ có dấu cách toàn-độ ở cuối → dùng tiêu đề placeholder dự phòng
 		t.Errorf("ch2 title: %q", got[1].Title)
 	}
 }

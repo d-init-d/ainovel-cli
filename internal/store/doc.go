@@ -1,22 +1,22 @@
-// Package store 提供基于文件系统的持久化存储。
+// Package store cung cấp lưu trữ bền vững dựa trên hệ thống file.
 //
-// 架构：1 个 IO 基座 + 多个子存储 + 1 个组合根。
-// 每个子存储持有独立的 IO 实例和独立的 sync.RWMutex。
-// 主要领域（Progress、Outline、Drafts、Summaries 等）的读写互不阻塞；
-// WorldStore 将多个低频小领域合并共享一把锁。
+// Kiến trúc: 1 nền tảng IO + nhiều sub-store + 1 gốc tổng hợp.
+// Mỗi sub-store giữ một instance IO độc lập và một sync.RWMutex riêng.
+// Các thao tác đọc/ghi trên các miền chính (Progress, Outline, Drafts, Summaries, v.v.) không chặn lẫn nhau;
+// WorldStore gộp nhiều miền nhỏ ít dùng để chia sẻ chung một khóa.
 //
-// 组合根 Store 持有所有子存储的引用，并负责跨域原子操作
-// （ExpandArc、AppendVolume、ClearHandledSteer）。
+// Gốc tổng hợp Store giữ tham chiếu đến tất cả sub-store và chịu trách nhiệm
+// thực hiện các thao tác nguyên tử liên miền (ExpandArc, AppendVolume, ClearHandledSteer).
 //
-// 子存储划分：
-//   - ProgressStore: 进度主状态（meta/progress.json）
-//   - OutlineStore: 前提、大纲（扁平/分层）、指南针
-//   - DraftStore: 章节构思、草稿、终稿
-//   - SummaryStore: 章/弧/卷摘要
-//   - RunMetaStore: 运行元数据（模型、干预历史）
-//   - SignalStore: 一次性信号文件（PendingCommit 恢复）
-//   - CheckpointStore: step 级 checkpoint（meta/checkpoints.jsonl）
-//   - RuntimeStore: 运行时事件队列（meta/runtime/*.jsonl）
-//   - CharacterStore: 角色档案、状态快照
-//   - WorldStore: 时间线、伏笔、关系、状态变化、世界规则、风格规则、审阅
+// Phân chia sub-store:
+//   - ProgressStore: trạng thái chính về tiến độ (meta/progress.json)
+//   - OutlineStore: tiền đề, đề cương (phẳng/phân cấp), la bàn
+//   - DraftStore: ý tưởng chương, bản nháp, bản cuối
+//   - SummaryStore: tóm tắt theo chương/cung truyện/tập
+//   - RunMetaStore: siêu dữ liệu Run (mô hình, lịch sử can thiệp)
+//   - SignalStore: file tín hiệu một lần (phục hồi PendingCommit)
+//   - CheckpointStore: điểm khôi phục cấp step (meta/checkpoints.jsonl)
+//   - RuntimeStore: hàng đợi sự kiện runtime (meta/runtime/*.jsonl)
+//   - CharacterStore: hồ sơ nhân vật, ảnh chụp trạng thái
+//   - WorldStore: dòng thời gian, phục bút, quan hệ, thay đổi trạng thái, quy tắc thế giới, quy tắc phong cách, đánh giá
 package store

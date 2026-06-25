@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// findViolation 在结果中按 rule + target 查找第一条违规。
+// findViolation tìm vi phạm đầu tiên trong kết quả theo rule + target.
 func findViolation(vs []Violation, rule, target string) *Violation {
 	for i := range vs {
 		if vs[i].Rule == rule && vs[i].Target == target {
@@ -75,7 +75,7 @@ func TestCheck_FatigueWordsUnderLimit(t *testing.T) {
 }
 
 func TestCheck_FatigueWordsAtLimit(t *testing.T) {
-	// limit=1，actual=1 → 不违规
+	// limit=1, actual=1 → không vi phạm
 	text := "他不禁笑了。"
 	vs := Check(text, -1, Structured{
 		FatigueWords: map[string]int{"不禁": 1},
@@ -86,7 +86,7 @@ func TestCheck_FatigueWordsAtLimit(t *testing.T) {
 }
 
 func TestCheck_FatigueWordsOverLimit(t *testing.T) {
-	// limit=1，actual=3 → warning
+	// limit=1, actual=3 → warning
 	text := "他不禁笑了，又不禁皱眉，最后不禁离去。"
 	vs := Check(text, -1, Structured{
 		FatigueWords: map[string]int{"不禁": 1},
@@ -106,12 +106,12 @@ func TestCheck_FatigueWordsOverLimit(t *testing.T) {
 	}
 }
 
-// 字数边界测试
-// 范围 3000-6000:
-//   actual 3000 → 在范围 → no violation
+// Kiểm thử biên số từ
+// Khoảng 3000-6000:
+//   actual 3000 → trong khoảng → no violation
 //   actual 2999 → deviation ≈ 0.033% → warning
 //   actual 2401 → deviation = 599/3000 ≈ 19.97% → warning
-//   actual 2400 → deviation = 600/3000 = 20% → error（>= threshold）
+//   actual 2400 → deviation = 600/3000 = 20% → error (>= threshold)
 //   actual 6001 → deviation ≈ 0.017% → warning
 //   actual 7199 → deviation ≈ 19.98% → warning
 //   actual 7200 → deviation = 1200/6000 = 20% → error
@@ -122,7 +122,7 @@ func TestCheck_ChapterWordsInRange(t *testing.T) {
 	if len(vs) != 0 {
 		t.Errorf("in range should yield no violation, got %+v", vs)
 	}
-	// 边界值
+	// Giá trị biên
 	vs = Check("", 3000, Structured{ChapterWords: rng})
 	if len(vs) != 0 {
 		t.Errorf("at min should be in range, got %+v", vs)
@@ -149,7 +149,7 @@ func TestCheck_ChapterWordsSlightlyBelow(t *testing.T) {
 }
 
 func TestCheck_ChapterWordsAtThreshold(t *testing.T) {
-	// actual 2400 → deviation = 600/3000 = 0.2 == 20% → error（>= threshold）
+	// actual 2400 → deviation = 600/3000 = 0.2 == 20% → error (>= threshold)
 	rng := &WordRange{Min: 3000, Max: 6000}
 	vs := Check("", 2400, Structured{ChapterWords: rng})
 	if len(vs) != 1 || vs[0].Severity != SeverityError {
@@ -179,8 +179,8 @@ func TestCheck_ChapterWordsSlightlyAbove(t *testing.T) {
 }
 
 func TestCheck_AutoWordCount(t *testing.T) {
-	// wordCount = -1 时由 checker 自行计算
-	text := strings.Repeat("汉", 2500) // 2500 个汉字
+	// Khi wordCount = -1, checker tự tính số từ
+	text := strings.Repeat("汉", 2500) // 2500 ký tự Hán
 	rng := &WordRange{Min: 3000, Max: 6000}
 	vs := Check(text, -1, Structured{ChapterWords: rng})
 	if len(vs) != 1 || vs[0].Rule != "chapter_words" {
@@ -204,7 +204,7 @@ func TestCheck_MultipleRulesAtOnce(t *testing.T) {
 	}
 	vs := Check(text, 10, s)
 
-	// 应同时触发三类：forbidden_chars + fatigue_words + chapter_words
+	// Nên đồng thời kích hoạt ba loại: forbidden_chars + fatigue_words + chapter_words
 	rules := map[string]bool{}
 	for _, v := range vs {
 		rules[v.Rule] = true
@@ -215,7 +215,7 @@ func TestCheck_MultipleRulesAtOnce(t *testing.T) {
 }
 
 func TestCheck_FatigueZeroLimitSkipped(t *testing.T) {
-	// limit=0 是非法值，应跳过整条规则（parser 也会过滤，这里防御）
+	// limit=0 là giá trị không hợp lệ, nên bỏ qua toàn bộ quy tắc (parser cũng lọc, đây là phòng thủ)
 	text := "不禁不禁不禁"
 	vs := Check(text, -1, Structured{
 		FatigueWords: map[string]int{"不禁": 0},
@@ -226,7 +226,7 @@ func TestCheck_FatigueZeroLimitSkipped(t *testing.T) {
 }
 
 func TestCheck_EmptyTargetsSkipped(t *testing.T) {
-	// 空字符串目标不应导致 false positive
+	// Mục tiêu chuỗi rỗng không được tạo ra false positive
 	vs := Check("任何文本", -1, Structured{
 		ForbiddenChars:   []string{""},
 		ForbiddenPhrases: []string{""},

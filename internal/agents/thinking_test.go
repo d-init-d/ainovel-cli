@@ -15,12 +15,12 @@ func TestParseThinkingLevel(t *testing.T) {
 		"medium":  agentcore.ThinkingMedium,
 		"high":    agentcore.ThinkingHigh,
 		"xhigh":   agentcore.ThinkingXHigh,
-		"  HIGH ": agentcore.ThinkingHigh, // 大小写/空白归一
+		"  HIGH ": agentcore.ThinkingHigh, // chuẩn hóa hoa/thường và khoảng trắng
 	}
 	for in, want := range ok {
 		got, err := ParseThinkingLevel(in)
 		if err != nil {
-			t.Errorf("ParseThinkingLevel(%q) 意外报错: %v", in, err)
+			t.Errorf("ParseThinkingLevel(%q) lỗi không mong đợi: %v", in, err)
 			continue
 		}
 		if got != want {
@@ -30,7 +30,7 @@ func TestParseThinkingLevel(t *testing.T) {
 
 	for _, bad := range []string{"ultra", "max", "true", "0"} {
 		if _, err := ParseThinkingLevel(bad); err == nil {
-			t.Errorf("ParseThinkingLevel(%q) 应报错，实际通过", bad)
+			t.Errorf("ParseThinkingLevel(%q) phải báo lỗi, nhưng thực tế đã thành công", bad)
 		}
 	}
 }

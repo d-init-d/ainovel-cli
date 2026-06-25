@@ -1,68 +1,68 @@
-# 上下文管理说明
+# Tài liệu quản lý ngữ cảnh
 
-本文档说明 `ainovel-cli` 当前的上下文管理体系，包括：
+Tài liệu này mô tả hệ thống quản lý ngữ cảnh hiện tại của `ainovel-cli`, bao gồm:
 
-- 为什么要做上下文管理
-- 上下文从哪里来
-- 运行时如何压缩、恢复、交接
-- 每个策略的价值、触发条件与适用场景
-- 出问题时应该先看哪里
+- Tại sao cần quản lý ngữ cảnh
+- Ngữ cảnh đến từ đâu
+- Cách nén, khôi phục, và bàn giao trong thời gian chạy
+- Giá trị, điều kiện kích hoạt và phạm vi áp dụng của từng chiến lược
+- Khi có sự cố, nên xem ở đâu trước
 
-目标不是介绍抽象概念，而是让后续维护者打开这一份文档，就能快速理解当前实现和排障入口。
+Mục tiêu không phải giới thiệu các khái niệm trừu tượng, mà để người bảo trì sau này mở tài liệu này ra là có thể hiểu ngay triển khai hiện tại và điểm đầu vào để gỡ lỗi.
 
-## 1. 设计目标
+## 1. Mục tiêu thiết kế
 
-本项目的上下文管理不是通用聊天场景，而是面向小说创作场景。它要同时解决几类问题：
+Quản lý ngữ cảnh trong dự án này không phải cho kịch bản chat thông thường, mà hướng đến kịch bản sáng tác tiểu thuyết. Nó cần giải quyết đồng thời nhiều vấn đề:
 
-1. 长对话会超出模型上下文窗口。
-2. 小说创作需要保留的不是“聊天历史本身”，而是结构化叙事记忆。
-3. Writer 在压缩后不能丢掉角色状态、伏笔、章节计划、风格约束、审稿待修项。
-4. 恢复写作时不能假设模型还“记得之前聊过什么”，必须优先依赖持久化工件。
+1. Hội thoại dài sẽ vượt quá cửa sổ ngữ cảnh của mô hình.
+2. Sáng tác tiểu thuyết cần lưu giữ không phải "lịch sử chat", mà là bộ nhớ tường thuật có cấu trúc.
+3. Người viết sau khi nén không được mất trạng thái nhân vật, phục bút, kế hoạch chương, ràng buộc phong cách, các mục biên tập chờ sửa.
+4. Khi khôi phục việc viết, không thể giả định mô hình vẫn "nhớ những gì đã nói trước", phải ưu tiên dựa vào các sản phẩm đã lưu trữ.
 
-因此我们采用的是一套“分层记忆”方案：
+Vì vậy chúng tôi áp dụng phương án "bộ nhớ phân lớp":
 
-- 短期记忆：最近保留的消息尾部
-- 中期记忆：压缩生成的 `ContextSummary`
-- 长期记忆：项目 store 中的结构化工件
-- 恢复记忆：handoff / restore pack / novel_context
+- Bộ nhớ ngắn hạn: phần đuôi các tin nhắn được giữ lại gần nhất
+- Bộ nhớ trung hạn: `ContextSummary` được tạo ra từ quá trình nén
+- Bộ nhớ dài hạn: các sản phẩm có cấu trúc trong Store của dự án
+- Bộ nhớ khôi phục: handoff / restore pack / novel_context
 
-## 2. 整体架构
+## 2. Kiến trúc tổng thể
 
-### 2.1 主要分层
+### 2.1 Các lớp chính
 
-当前上下文管理分成四层：
+Quản lý ngữ cảnh hiện tại được chia thành bốn lớp:
 
 1. `agentcore/context`
-   负责通用的上下文预算、策略管线、压缩/恢复框架。
+   Chịu trách nhiệm về ngân sách ngữ cảnh chung, pipeline chiến lược, khung nén/khôi phục.
 
 2. `internal/tools/novel_context`
-   负责把小说项目中的结构化数据装配成当前轮可用上下文。
+   Chịu trách nhiệm lắp ráp dữ liệu có cấu trúc từ dự án tiểu thuyết thành ngữ cảnh khả dụng cho vòng hiện tại.
 
 3. `internal/orchestrator/store_summary_*`
-   负责 Writer 专用的 store-based 快速压缩。
+   Chịu trách nhiệm nén nhanh dựa trên Store chuyên dùng cho Người viết.
 
 4. `internal/orchestrator/writer_restore.go`
-   负责在 `FullSummary` 之后追加一份压缩后恢复包，确保 Writer 能继续写。
+   Chịu trách nhiệm nối thêm một gói khôi phục sau `FullSummary`, đảm bảo Người viết có thể tiếp tục viết.
 
-### 2.2 数据流
+### 2.2 Luồng dữ liệu
 
-运行时主要有两条上下文路径：
+Trong thời gian chạy có hai đường ngữ cảnh chính:
 
-1. 正常工作路径
-   - Agent 调用 `novel_context`
-   - `novel_context` 从 store 读取章节摘要、计划、角色、时间线等数据
-   - 这些数据进入当前轮 prompt
+1. Đường làm việc bình thường
+   - Agent gọi `novel_context`
+   - `novel_context` đọc tóm tắt chương, kế hoạch, nhân vật, dòng thời gian, v.v. từ Store
+   - Các dữ liệu này đi vào prompt của vòng hiện tại
 
-2. 上下文过长路径
-   - `ContextManager` 检测到 token 压力
-   - 按策略顺序压缩
-   - 优先尝试轻量压缩和 store-based 压缩
-   - 还不够时才走 LLM `FullSummary`
-   - `FullSummary` 后注入 restore pack
+2. Đường ngữ cảnh quá dài
+   - `ContextManager` phát hiện áp lực token
+   - Nén theo thứ tự chiến lược
+   - Ưu tiên thử nén nhẹ và nén dựa trên Store
+   - Chỉ dùng `FullSummary` bằng LLM khi vẫn chưa đủ
+   - Sau `FullSummary` thì tiêm restore pack
 
-## 3. 关键文件
+## 3. Các file quan trọng
 
-### 3.1 通用上下文引擎
+### 3.1 Engine ngữ cảnh chung
 
 - `../agentcore/context/strategy.go`
 - `../agentcore/context/engine.go`
@@ -72,424 +72,424 @@
 - `../agentcore/context/message.go`
 - `../agentcore/context/summary_run.go`
 
-作用：
+Vai trò:
 
-- 定义 `Strategy` / `ForceCompactionStrategy`
-- 负责基于预算执行策略链
-- 负责 `ContextSummary` 的表示与 LLM 转换
-- 负责 `FullSummary` 的 LLM 摘要压缩
+- Định nghĩa `Strategy` / `ForceCompactionStrategy`
+- Thực thi chuỗi chiến lược dựa trên ngân sách
+- Biểu diễn `ContextSummary` và chuyển đổi qua LLM
+- Nén tóm tắt bằng LLM cho `FullSummary`
 
-### 3.2 项目侧接线
+### 3.2 Kết nối phía dự án
 
 - `internal/orchestrator/agents.go`
 
-作用：
+Vai trò:
 
-- 组装 Writer / Coordinator 的 `ContextManager`
-- 给 Writer 注入额外的 `StoreSummaryCompact`
-- 给 Writer 配置小说定制的 `FullSummary` prompt
-- 给 Writer 配置 `writerRestorePack`
+- Lắp ráp `ContextManager` cho Người viết / Điều phối viên
+- Tiêm `StoreSummaryCompact` bổ sung cho Người viết
+- Cấu hình prompt `FullSummary` tùy chỉnh cho tiểu thuyết cho Người viết
+- Cấu hình `writerRestorePack` cho Người viết
 
-### 3.3 项目侧压缩与恢复
+### 3.3 Nén và khôi phục phía dự án
 
 - `internal/orchestrator/store_summary_strategy.go`
 - `internal/orchestrator/store_summary_builder.go`
 - `internal/orchestrator/writer_restore.go`
 
-作用：
+Vai trò:
 
-- 在 LLM 摘要之前，优先使用 store 数据做快速压缩
-- 统一构建 Writer 压缩与恢复所需的结构化上下文
-- 在 `FullSummary` 后追加一份纯内存 restore message
+- Trước khi tóm tắt bằng LLM, ưu tiên dùng dữ liệu Store để nén nhanh
+- Xây dựng thống nhất ngữ cảnh có cấu trúc cần thiết cho việc nén và khôi phục Người viết
+- Nối thêm một restore message thuần bộ nhớ sau `FullSummary`
 
-### 3.4 结构化上下文装配
+### 3.4 Lắp ráp ngữ cảnh có cấu trúc
 
 - `internal/tools/novel_context.go`
 - `internal/tools/novel_context_builders.go`
 - `internal/domain/runtime.go`
 
-作用：
+Vai trò:
 
-- 定义 `ContextProfile` / `MemoryPolicy`
-- 决定加载多少章节摘要、多少时间线、是否启用分层摘要
-- 把 store 中的章节、角色、伏笔、时间线、审稿经验等装配出来
+- Định nghĩa `ContextProfile` / `MemoryPolicy`
+- Quyết định tải bao nhiêu tóm tắt chương, bao nhiêu dòng thời gian, có bật tóm tắt phân lớp không
+- Lắp ráp chương, nhân vật, phục bút, dòng thời gian, kinh nghiệm biên tập, v.v. từ Store ra
 
-### 3.5 交接与恢复
+### 3.5 Bàn giao và khôi phục
 
 - `internal/orchestrator/handoff_policy.go`
 - `internal/orchestrator/recovery_engine.go`
 
-作用：
+Vai trò:
 
-- 在长篇/返工/审阅阶段优先依赖 handoff
-- 恢复时把结构化交接包拼进 prompt
+- Trong các giai đoạn viết dài / làm lại / xem lại, ưu tiên dựa vào handoff
+- Khi khôi phục, ghép gói bàn giao có cấu trúc vào prompt
 
-### 3.6 可观测性
+### 3.6 Khả năng quan sát
 
 - `internal/orchestrator/run.go`
 - `internal/orchestrator/runtime.go`
 - `internal/entry/tui/panels.go`
 
-作用：
+Vai trò:
 
-- 记录上下文重写事件
-- 输出策略名称、token 变化、消息保留量
-- 让 TUI 能看到当前上下文是 `projected` 还是 `compacted`
+- Ghi lại sự kiện ghi lại ngữ cảnh
+- Xuất tên chiến lược, thay đổi token, số tin nhắn được giữ lại
+- Cho phép TUI thấy ngữ cảnh hiện tại là `projected` hay `compacted`
 
-## 4. ContextManager 是怎么组装的
+## 4. ContextManager được lắp ráp như thế nào
 
-Writer 和 Coordinator 都走 `newContextManager`，但配置不同。
+Người viết và Điều phối viên đều dùng `newContextManager`, nhưng cấu hình khác nhau.
 
-当前 `contextManagerConfig` 的关键参数：
+Các tham số quan trọng của `contextManagerConfig` hiện tại:
 
 - `ContextWindow`
-  模型总上下文窗口。
+  Tổng cửa sổ ngữ cảnh của mô hình.
 
 - `ReserveTokens`
-  给模型输出预留的 token。
+  Token dự phòng cho đầu ra của mô hình.
 
 - `KeepRecentTokens`
-  压缩时尽量保留的最近消息尾部预算。
+  Ngân sách phần đuôi tin nhắn gần nhất được giữ lại khi nén.
 
 - `ToolMicrocompact`
-  工具结果微压缩配置。
+  Cấu hình nén vi mô kết quả công cụ.
 
 - `ExtraStrategies`
-  项目侧额外压缩策略。当前 Writer 用来挂 `StoreSummaryCompact`。
+  Các chiến lược nén bổ sung phía dự án. Hiện tại Người viết dùng để gắn `StoreSummaryCompact`.
 
 - `Summary`
-  `FullSummary` 的配置，包括自定义 prompt 和 post-summary hook。
+  Cấu hình `FullSummary`, bao gồm prompt tùy chỉnh và post-summary hook.
 
-当前实际配置值：
+Giá trị cấu hình thực tế hiện tại:
 
-| 参数 | Writer | Coordinator |
-|------|--------|-------------|
-| ReserveTokens | 16,384 | 32,000 |
-| KeepRecentTokens | 20,000 | 30,000 |
+| Tham số | Người viết | Điều phối viên |
+|---------|-----------|----------------|
+| ReserveTokens | 16.384 | 32.000 |
+| KeepRecentTokens | 20.000 | 30.000 |
 | CommitOnProject | false | true |
-| IdleThreshold | 5min | 无 |
-| ExtraStrategies | StoreSummaryCompact | 无 |
-| 自定义 Summary Prompt | 小说叙事版 | 默认(代码助手版) |
+| IdleThreshold | 5 phút | Không có |
+| ExtraStrategies | StoreSummaryCompact | Không có |
+| Prompt Summary tùy chỉnh | Phiên bản tường thuật tiểu thuyết | Mặc định (phiên bản trợ lý code) |
 
-压缩触发阈值 = `ContextWindow - ReserveTokens`。例如窗口 128K 时，Writer 在 ~112K 触发，Coordinator 在 ~96K 触发。
+Ngưỡng kích hoạt nén = `ContextWindow - ReserveTokens`. Ví dụ với cửa sổ 128K, Người viết kích hoạt ở ~112K, Điều phối viên ở ~96K.
 
-当前 Writer 的策略管线顺序是：
+Thứ tự pipeline chiến lược hiện tại của Người viết:
 
 1. `ToolResultMicrocompact`
 2. `LightTrim`
 3. `StoreSummaryCompact`
 4. `FullSummary`
 
-这个顺序有明确含义：
+Thứ tự này có ý nghĩa rõ ràng:
 
-- 先用最便宜的办法清理工具噪音
-- 再裁剪超长文本块
-- 如果 store 数据够，直接做零 LLM 的结构化压缩
-- 最后才退到 LLM 摘要
+- Trước tiên dùng cách rẻ nhất để dọn nhiễu công cụ
+- Rồi cắt bớt các khối văn bản quá dài
+- Nếu dữ liệu Store đủ, thực hiện nén có cấu trúc không tốn LLM
+- Cuối cùng mới lui về tóm tắt bằng LLM
 
-## 5. 每个策略的作用
+## 5. Vai trò của từng chiến lược
 
 ### 5.1 ToolResultMicrocompact
 
-实现位置：
+Vị trí triển khai:
 
 - `../agentcore/context/strategy_tool.go`
 
-作用：
+Vai trò:
 
-- 清理历史 `tool_result`
-- 给旧工具结果替换成简短占位文本
+- Dọn dẹp các `tool_result` trong lịch sử
+- Thay thế kết quả công cụ cũ bằng văn bản placeholder ngắn gọn
 
-价值：
+Giá trị:
 
-- 工具返回内容通常体积大、信息密度低
-- 很多旧工具结果只是“过程噪音”，不是小说记忆
+- Nội dung trả về của công cụ thường có kích thước lớn nhưng mật độ thông tin thấp
+- Nhiều kết quả công cụ cũ chỉ là "nhiễu quá trình", không phải bộ nhớ tiểu thuyết
 
-当前 Writer 的配置特点：
+Đặc điểm cấu hình hiện tại của Người viết:
 
-- 设置了 `IdleThreshold = 5m`
+- Đặt `IdleThreshold = 5m`
 
-这意味着：
+Điều này có nghĩa:
 
-- 如果最近 assistant 消息已经闲置超过阈值
-- 会更激进地减少保留的旧工具结果数量
+- Nếu tin nhắn assistant gần nhất đã ở trạng thái nhàn rỗi quá ngưỡng
+- Sẽ giảm mạnh hơn số kết quả công cụ cũ được giữ lại
 
-适用场景：
+Phạm vi áp dụng:
 
-- 多轮 `novel_context`
-- 多轮 read / check / draft 工具之后
+- Nhiều vòng `novel_context`
+- Sau nhiều vòng công cụ read / check / draft
 
 ### 5.2 LightTrim
 
-实现位置：
+Vị trí triển khai:
 
 - `../agentcore/context/strategy_trim.go`
 
-作用：
+Vai trò:
 
-- 截断非常长的文本块
-- 保留头部和尾部，中间用占位符替代
+- Cắt bớt các khối văn bản rất dài
+- Giữ lại đầu và đuôi, thay thế phần giữa bằng placeholder
 
-价值：
+Giá trị:
 
-- 保住消息结构不变
-- 代价低
-- 很适合处理超长章节原文或大段输出
+- Giữ nguyên cấu trúc tin nhắn
+- Chi phí thấp
+- Rất phù hợp để xử lý nội dung chương quá dài hoặc đầu ra có đoạn lớn
 
-适用场景：
+Phạm vi áp dụng:
 
-- 单条消息过长，但还不需要整段历史做 summary
+- Khi một tin nhắn đơn quá dài nhưng chưa cần tóm tắt toàn bộ lịch sử
 
 ### 5.3 StoreSummaryCompact
 
-实现位置：
+Vị trí triển khai:
 
 - `internal/orchestrator/store_summary_strategy.go`
 - `internal/orchestrator/store_summary_builder.go`
 
-作用：
+Vai trò:
 
-- 当 Writer 上下文过长时
-- 优先使用持久化 store 中的结构化记忆来替换旧消息
-- 不调用 LLM
+- Khi ngữ cảnh Người viết quá dài
+- Ưu tiên dùng bộ nhớ có cấu trúc từ Store lưu trữ để thay thế các tin nhắn cũ
+- Không gọi LLM
 
-它不是对话摘要，而是“结构化记忆替换”。
+Đây không phải tóm tắt hội thoại, mà là "thay thế bộ nhớ có cấu trúc".
 
-当前保留的核心数据包括：
+Dữ liệu cốt lõi hiện được giữ lại bao gồm:
 
-- 当前进度
-- 最近章节摘要
-- 当前章节计划
-- 当前章节大纲
-- 当前弧摘要
-- 当前卷摘要
-- 角色快照
-- 活跃伏笔
-- 待修审稿问题
-- 最近时间线
-- 风格规则
+- Tiến độ hiện tại
+- Tóm tắt chương gần nhất
+- Kế hoạch chương hiện tại
+- Đề cương chương hiện tại
+- Tóm tắt cung truyện hiện tại
+- Tóm tắt tập hiện tại
+- Snapshot nhân vật
+- Phục bút đang hoạt động
+- Các vấn đề biên tập chờ sửa
+- Dòng thời gian gần nhất
+- Quy tắc phong cách
 
-触发前提：
+Điều kiện kích hoạt:
 
-- 当前章节大于 1
-- store 中已经有足够的历史摘要
-- 且当前章至少有工作态数据
-  - `chapter_plan` 或 `current_outline`
+- Chương hiện tại lớn hơn 1
+- Trong Store đã có đủ tóm tắt lịch sử
+- Và chương hiện tại có ít nhất dữ liệu trạng thái làm việc
+  - `chapter_plan` hoặc `current_outline`
 
-价值：
+Giá trị:
 
-- 降低 LLM 压缩次数
-- 避免小说关键信息在摘要时漂移
-- 让长期记忆优先依赖落盘事实，而不是聊天历史
+- Giảm số lần nén bằng LLM
+- Tránh thông tin quan trọng của tiểu thuyết bị trôi dạt khi tóm tắt
+- Để bộ nhớ dài hạn ưu tiên dựa vào dữ kiện đã lưu, không phải lịch sử chat
 
-为什么只给 Writer 用：
+Tại sao chỉ dùng cho Người viết:
 
-- 这是小说业务策略，不是通用框架策略
-- Coordinator / Editor 的上下文模式不同
-- 先在最需要连续创作记忆的 Writer 上验证最合理
+- Đây là chiến lược nghiệp vụ tiểu thuyết, không phải chiến lược framework chung
+- Điều phối viên / Biên tập viên có chế độ ngữ cảnh khác
+- Xác thực trên Người viết trước — nơi cần nhất bộ nhớ sáng tác liên tục
 
 ### 5.4 FullSummary
 
-实现位置：
+Vị trí triển khai:
 
 - `../agentcore/context/strategy_summary.go`
 - `../agentcore/context/summary_run.go`
 
-作用：
+Vai trò:
 
-- 当上面几层还不够时，使用模型生成 `ContextSummary`
-- 保留最近消息尾部
-- 把更早的上下文变成结构化 checkpoint
+- Khi các lớp trên vẫn chưa đủ, dùng mô hình tạo `ContextSummary`
+- Giữ lại phần đuôi tin nhắn gần nhất
+- Biến ngữ cảnh cũ hơn thành một điểm khôi phục có cấu trúc
 
-Writer 与默认代码助手不同的地方：
+Điểm khác biệt của Người viết so với trợ lý code mặc định:
 
-- Writer 使用了自定义 summary prompt
-- 摘要内容明确要求保留：
-  - 当前进度
-  - 角色即时状态
-  - 活跃伏笔与线索
-  - 审稿反馈与待修问题
-  - 风格与节奏
-  - 关键决策
-  - 下一步
-  - 关键上下文
+- Người viết dùng prompt tóm tắt tùy chỉnh
+- Nội dung tóm tắt yêu cầu rõ ràng phải giữ lại:
+  - Tiến độ hiện tại
+  - Trạng thái tức thời của nhân vật
+  - Phục bút và manh mối đang hoạt động
+  - Phản hồi biên tập và các mục chờ sửa
+  - Phong cách và nhịp truyện
+  - Các quyết định quan trọng
+  - Bước tiếp theo
+  - Ngữ cảnh then chốt
 
-价值：
+Giá trị:
 
-- 是最终兜底策略
-- 即使 store 数据不足，也仍然可以通过 LLM 维持连续性
+- Là chiến lược phòng thủ cuối cùng
+- Dù dữ liệu Store không đủ, vẫn có thể duy trì tính liên tục qua LLM
 
-### 5.5 熔断器（Circuit Breaker）
+### 5.5 Cầu dao ngắt mạch (Circuit Breaker)
 
-实现位置：
+Vị trí triển khai:
 
 - `../agentcore/context/engine.go`
 
-作用：
+Vai trò:
 
-- 当压缩连续失败达到阈值（默认 3 次）时，跳过当前轮压缩
-- 跳过时仍然发出 `RewriteEvent`（`Reason = “circuit_breaker”`）
-- TUI 会显示 scope 为”熔断跳过”
-- 采用半开模式：跳过一轮后下次会重试，成功则复位，再失败再跳过
+- Khi nén liên tiếp thất bại đạt ngưỡng (mặc định 3 lần), bỏ qua nén cho vòng hiện tại
+- Khi bỏ qua vẫn phát ra `RewriteEvent` (`Reason = "circuit_breaker"`)
+- TUI sẽ hiển thị scope là "Cầu dao ngắt"
+- Áp dụng chế độ bán mở: bỏ qua một vòng rồi thử lại lần sau, thành công thì reset, thất bại lại thì bỏ qua lại
 
-为什么需要：
+Tại sao cần:
 
-- LLM 摘要可能因网络、模型拒绝等原因连续失败
-- 没有熔断的话，每轮 Project 都会尝试并失败，浪费 API 调用
-- 长篇写作会话中这个浪费会累积
+- Tóm tắt bằng LLM có thể liên tiếp thất bại do mạng, mô hình từ chối, v.v.
+- Không có cầu dao ngắt, mỗi vòng Project sẽ thử rồi thất bại, lãng phí lời gọi API
+- Trong phiên viết dài, sự lãng phí này sẽ tích lũy
 
-排障：
+Gỡ lỗi:
 
-- 如果 TUI 持续显示”熔断跳过”，说明 LLM 摘要路径有问题
-- 检查 slog 中 `reason=circuit_breaker` 的上下文重写事件
-- 熔断不影响 `StoreSummaryCompact`（它不调 LLM）
+- Nếu TUI liên tục hiển thị "Cầu dao ngắt", nghĩa là đường tóm tắt LLM có vấn đề
+- Kiểm tra sự kiện ghi lại ngữ cảnh có `reason=circuit_breaker` trong slog
+- Cầu dao ngắt không ảnh hưởng đến `StoreSummaryCompact` (nó không gọi LLM)
 
-### 5.6 Token 估算（CJK 感知）
+### 5.6 Ước tính token (nhận biết CJK)
 
-实现位置：
+Vị trí triển khai:
 
 - `../agentcore/context/usage.go`
 
-作用：
+Vai trò:
 
-- 所有预算控制、压缩触发时机都依赖 token 估算
-- `estimateTextTokens` 自动检测文本是否以 CJK 字符为主
-- CJK 主导文本：`runes × 1.5`
-- ASCII 主导文本：`bytes / 4`
+- Tất cả kiểm soát ngân sách, thời điểm kích hoạt nén đều phụ thuộc ước tính token
+- `estimateTextTokens` tự động phát hiện xem văn bản có chủ yếu là ký tự CJK không
+- Văn bản chủ yếu CJK: `runes × 1.5`
+- Văn bản chủ yếu ASCII: `bytes / 4`
 
-为什么不能用标准 `bytes/4`：
+Tại sao không thể dùng `bytes/4` chuẩn:
 
-- 中文 UTF-8 一个字 = 3 bytes
-- `bytes/4` 会把一个中文字估为 0.75 token，实际约 1.5 token
-- 低估 2 倍会导致压缩触发严重滞后
+- Một ký tự tiếng Trung UTF-8 = 3 bytes
+- `bytes/4` sẽ ước tính một ký tự tiếng Trung là 0,75 token, thực tế khoảng 1,5 token
+- Ước tính thấp hơn 2 lần sẽ khiến nén kích hoạt bị trễ nghiêm trọng
 
-影响范围：
+Phạm vi ảnh hưởng:
 
-- `EstimateTokens`（单条消息）
-- `EstimateTotal`（消息列表）
-- `EstimateContextTokens`（混合估算：LLM 上报 Usage + 尾部消息估算）
-- `store_summary_builder.go` 中的预算裁剪
+- `EstimateTokens` (một tin nhắn đơn)
+- `EstimateTotal` (danh sách tin nhắn)
+- `EstimateContextTokens` (ước tính hỗn hợp: Usage LLM báo cáo + ước tính tin nhắn đuôi)
+- Cắt ngân sách trong `store_summary_builder.go`
 
-注意：ToolCall 的 args 是 JSON（ASCII 主导），仍使用 `bytes/4`，不受 CJK 调整影响。
+Lưu ý: args của ToolCall là JSON (chủ yếu ASCII), vẫn dùng `bytes/4`, không bị ảnh hưởng bởi điều chỉnh CJK.
 
-## 6. Writer 为什么有两套”压缩后记忆”
+## 6. Tại sao Người viết có hai bộ "bộ nhớ sau nén"
 
-当前 Writer 有两条看起来相近、但职责不同的链路：
+Hiện tại Người viết có hai đường trông có vẻ tương tự nhưng trách nhiệm khác nhau:
 
 ### 6.1 StoreSummaryCompact
 
-职责：
+Trách nhiệm:
 
-- 在压缩过程中直接替换旧消息
+- Trực tiếp thay thế các tin nhắn cũ trong quá trình nén
 
-特点：
+Đặc điểm:
 
-- 发生在 `FullSummary` 之前
-- 零 LLM
-- 用 store 替换更早历史
+- Xảy ra trước `FullSummary`
+- Không dùng LLM
+- Dùng Store để thay thế lịch sử cũ hơn
 
 ### 6.2 writerRestorePack
 
-实现位置：
+Vị trí triển khai:
 
 - `internal/orchestrator/writer_restore.go`
 
-职责：
+Trách nhiệm:
 
-- 在 `FullSummary` 之后追加一条 restore message
+- Nối thêm một restore message sau `FullSummary`
 
-特点：
+Đặc điểm:
 
-- 发生在 LLM 压缩之后
-- 通过 `PostSummaryHook` 注入
-- 用于补充 Writer 恢复继续创作时必须看到的结构化信息
+- Xảy ra sau khi LLM nén xong
+- Được tiêm qua `PostSummaryHook`
+- Dùng để bổ sung thông tin có cấu trúc mà Người viết cần thấy khi khôi phục tiếp tục sáng tác
 
-为什么两者都需要：
+Tại sao cần cả hai:
 
-- `StoreSummaryCompact` 不是总能命中
-  - 比如第一章或 store 数据不够时
-- `FullSummary` 即使做得再好，也可能遗漏 store 中的精确信息
-- 所以 restore pack 作为最后一道保险
+- `StoreSummaryCompact` không phải lúc nào cũng khớp
+  - Ví dụ chương đầu tiên hoặc khi dữ liệu Store chưa đủ
+- `FullSummary` dù tốt đến đâu cũng có thể bỏ sót thông tin chính xác trong Store
+- Vì vậy restore pack là lớp bảo hiểm cuối cùng
 
-现在这两者已经共用 `store_summary_builder.go`，避免口径漂移。
+Hiện tại cả hai đã dùng chung `store_summary_builder.go`, tránh sự phân kỳ về khẩu径.
 
-## 7. novel_context 的作用
+## 7. Vai trò của novel_context
 
-实现位置：
+Vị trí triển khai:
 
 - `internal/tools/novel_context.go`
 - `internal/tools/novel_context_builders.go`
 
-`novel_context` 不是压缩策略，它是运行时的“结构化上下文装配器”。
+`novel_context` không phải chiến lược nén, nó là "bộ lắp ráp ngữ cảnh có cấu trúc" trong thời gian chạy.
 
-它把 store 中的数据分成几类：
+Nó chia dữ liệu trong Store thành các loại:
 
 - `working_memory`
-  - 当前章节计划
-  - 当前章节大纲
-  - 最近章节摘要
-  - 时间线
-  - checkpoint
-  - previous tail
+  - Kế hoạch chương hiện tại
+  - Đề cương chương hiện tại
+  - Tóm tắt chương gần nhất
+  - Dòng thời gian
+  - Điểm khôi phục
+  - Previous tail
 
 - `episodic_memory`
-  - 角色状态
-  - 关系状态
-  - 最近状态变化
-  - 伏笔
+  - Trạng thái nhân vật
+  - Trạng thái quan hệ
+  - Các thay đổi trạng thái gần nhất
+  - Phục bút
 
 - `reference_pack`
-  - 更稳定的设定和参考数据
+  - Dữ liệu thiết lập và tham chiếu ổn định hơn
 
 - `selected_memory`
-  - 按当前任务挑选出来的少量重要记忆
+  - Một lượng nhỏ bộ nhớ quan trọng được chọn theo nhiệm vụ hiện tại
 
-价值：
+Giá trị:
 
-- 它决定了每一轮真正“喂给模型”的结构化小说上下文
-- `StoreSummaryCompact` 不是调用它本身，但和它复用同类数据来源与装配思路
+- Nó quyết định ngữ cảnh tiểu thuyết có cấu trúc thực sự "được nạp cho mô hình" trong mỗi vòng
+- `StoreSummaryCompact` không gọi nó trực tiếp, nhưng tái sử dụng cùng nguồn dữ liệu và cách tiếp cận lắp ráp
 
-## 8. ContextProfile 与 MemoryPolicy
+## 8. ContextProfile và MemoryPolicy
 
-实现位置：
+Vị trí triển khai:
 
 - `internal/domain/runtime.go`
 
 ### 8.1 ContextProfile
 
-作用：
+Vai trò:
 
-- 按总章节数决定加载窗口大小
+- Quyết định kích thước cửa sổ tải dựa trên tổng số chương
 
-当前规则：
+Quy tắc hiện tại:
 
-- `<= 15` 章
-  - 最近 `10` 章摘要
-  - 最近 `10` 章时间线
+- `<= 15` chương
+  - `10` tóm tắt chương gần nhất
+  - `10` dòng thời gian gần nhất
 
-- `<= 50` 章
-  - 最近 `5` 章摘要
-  - 最近 `8` 章时间线
+- `<= 50` chương
+  - `5` tóm tắt chương gần nhất
+  - `8` dòng thời gian gần nhất
 
-- `> 50` 章
-  - 最近 `3` 章摘要
-  - 最近 `5` 章时间线
-  - 启用分层摘要
+- `> 50` chương
+  - `3` tóm tắt chương gần nhất
+  - `5` dòng thời gian gần nhất
+  - Bật tóm tắt phân lớp
 
-价值：
+Giá trị:
 
-- 控制上下文规模
-- 避免长篇时把所有历史都塞进 prompt
+- Kiểm soát quy mô ngữ cảnh
+- Tránh nhét toàn bộ lịch sử vào prompt khi viết dài
 
 ### 8.2 MemoryPolicy
 
-作用：
+Vai trò:
 
-- 把当前上下文使用策略显式写出来
-- 供 `novel_context` 输出
-- 供 handoff / reminder / 诊断逻辑使用
+- Ghi rõ chiến lược sử dụng ngữ cảnh hiện tại
+- Cung cấp cho đầu ra của `novel_context`
+- Cung cấp cho logic handoff / reminder / chẩn đoán
 
-关键字段：
+Các trường quan trọng:
 
 - `SummaryWindow`
 - `TimelineWindow`
@@ -498,42 +498,42 @@ Writer 与默认代码助手不同的地方：
 - `HandoffPreferred`
 - `ReadOnlyThreshold`
 
-价值：
+Giá trị:
 
-- 把“当前系统应该如何使用记忆”从隐式逻辑变成显式运行时策略
+- Biến "hệ thống hiện tại nên sử dụng bộ nhớ như thế nào" từ logic ngầm thành chiến lược thời gian chạy tường minh
 
-## 9. handoff 的作用
+## 9. Vai trò của handoff
 
-实现位置：
+Vị trí triển khai:
 
 - `internal/orchestrator/handoff_policy.go`
 
-当作品进入更长、更复杂、更依赖结构化工件的阶段时，系统会偏向 handoff。
+Khi tác phẩm bước vào giai đoạn dài hơn, phức tạp hơn, phụ thuộc nhiều hơn vào các sản phẩm có cấu trúc, hệ thống sẽ nghiêng về handoff.
 
-handoff pack 会记录：
+Gói handoff sẽ ghi lại:
 
-- 当前阶段与 flow
-- 下一章位置
-- 最近提交
-- 最近审阅
-- 最近摘要
-- 当前 memory policy
-- 恢复指导语
+- Giai đoạn hiện tại và flow
+- Vị trí chương tiếp theo
+- Lần lưu chương gần nhất
+- Lần xem lại gần nhất
+- Tóm tắt gần nhất
+- Memory policy hiện tại
+- Hướng dẫn khôi phục
 
-价值：
+Giá trị:
 
-- 中断恢复时不依赖聊天历史
-- 在返工、审阅、长篇场景中优先依赖结构化工件
+- Khi gián đoạn khôi phục không phụ thuộc vào lịch sử chat
+- Trong các kịch bản làm lại, xem lại, viết dài, ưu tiên dựa vào sản phẩm có cấu trúc
 
-## 10. 可观测性与排障
+## 10. Khả năng quan sát và gỡ lỗi
 
-### 10.1 上下文重写事件
+### 10.1 Sự kiện ghi lại ngữ cảnh
 
-实现位置：
+Vị trí triển khai:
 
 - `internal/orchestrator/run.go`
 
-每次上下文重写都会通过 `contextRewriteCallback` 输出：
+Mỗi lần ghi lại ngữ cảnh sẽ xuất ra qua `contextRewriteCallback`:
 
 - `reason`
 - `strategy`
@@ -549,121 +549,121 @@ handoff pack 会记录：
 - `summary_runes`
 - `duration_ms`
 
-这会同时进入：
+Điều này sẽ đồng thời đi vào:
 
 - `slog`
-- runtime boundary 队列
-- TUI `COMPACT` 事件
+- Hàng đợi runtime boundary
+- Sự kiện `COMPACT` của TUI
 
-### 10.2 TUI 中能看到什么
+### 10.2 Có thể thấy gì trong TUI
 
-TUI 会展示：
+TUI sẽ hiển thị:
 
-- 当前上下文 token（带健康度渐变色）
-- context window
-- 当前上下文 scope（含"熔断跳过"）
-- 当前最后一次策略名称
-- summary 数量
+- Token ngữ cảnh hiện tại (với màu chuyển sắc theo tình trạng sức khỏe)
+- Context window
+- Scope ngữ cảnh hiện tại (bao gồm "Cầu dao ngắt")
+- Tên chiến lược cuối cùng hiện tại
+- Số lượng summary
 
-上下文百分比的颜色含义（实现在 `internal/entry/tui/layout.go`）：
+Ý nghĩa màu sắc phần trăm ngữ cảnh (triển khai trong `internal/entry/tui/layout.go`):
 
-| 颜色 | 条件 | 含义 |
-|------|------|------|
-| 绿色 | < 70% | 充裕，远离压缩阈值 |
-| 黄色 | 70-85% | 接近压缩阈值 |
-| 红色 | > 85% | 即将或正在压缩 |
+| Màu sắc | Điều kiện | Ý nghĩa |
+|---------|-----------|---------|
+| Xanh lá | < 70% | Dồi dào, cách xa ngưỡng nén |
+| Vàng | 70-85% | Gần đến ngưỡng nén |
+| Đỏ | > 85% | Sắp hoặc đang nén |
 
-Scope 的中文标签：
+Nhãn tiếng Việt của Scope:
 
-| Scope | 显示 | 含义 |
-|-------|------|------|
-| baseline | 基线 | 正常状态 |
-| projected | 投影 | 临时压缩预览 |
-| compacted | 已提交 | 压缩已生效 |
-| recovered | 恢复 | 溢出后恢复 |
-| skipped | 熔断跳过 | 压缩被熔断器跳过 |
+| Scope | Hiển thị | Ý nghĩa |
+|-------|----------|---------|
+| baseline | Cơ sở | Trạng thái bình thường |
+| projected | Chiếu | Xem trước nén tạm thời |
+| compacted | Đã nén | Nén đã có hiệu lực |
+| recovered | Đã khôi phục | Khôi phục sau tràn |
+| skipped | Cầu dao ngắt | Nén bị cầu dao ngắt bỏ qua |
 
-价值：
+Giá trị:
 
-- 能快速判断当前上下文健康度
-- 黄色/红色时可以预期即将发生压缩
-- 看到"熔断跳过"说明 LLM 摘要路径有问题
+- Có thể nhanh chóng đánh giá tình trạng sức khỏe ngữ cảnh hiện tại
+- Khi vàng/đỏ có thể dự đoán nén sắp xảy ra
+- Thấy "Cầu dao ngắt" nghĩa là đường tóm tắt LLM có vấn đề
 
-### 10.3 出问题先看哪里
+### 10.3 Khi có sự cố nên xem ở đâu trước
 
-#### 场景 1：Writer 压缩后丢章节计划
+#### Tình huống 1: Người viết mất kế hoạch chương sau khi nén
 
-先看：
+Xem trước:
 
-- `novel_context` 是否稳定注入 `chapter_plan`
-- `store_summary_builder.go` 是否拿到 `chapterPlan`
-- `writerRestorePack` 是否刷新
+- `novel_context` có tiêm ổn định `chapter_plan` không
+- `store_summary_builder.go` có lấy được `chapterPlan` không
+- `writerRestorePack` có được làm mới không
 
-重点文件：
+File trọng tâm:
 
 - `internal/tools/novel_context_builders.go`
 - `internal/orchestrator/store_summary_builder.go`
 - `internal/orchestrator/session.go`
 
-#### 场景 2：压缩后丢角色状态/伏笔
+#### Tình huống 2: Mất trạng thái nhân vật/phục bút sau khi nén
 
-先看：
+Xem trước:
 
 - `LoadLatestSnapshots`
 - `LoadActiveForeshadow`
 - `store_summary_builder.go`
-- Writer summary prompt 是否被覆盖
+- Prompt tóm tắt Người viết có bị ghi đè không
 
-#### 场景 3：压缩频繁但总是不命中 store_summary
+#### Tình huống 3: Nén thường xuyên nhưng không khớp store_summary
 
-先看：
+Xem trước:
 
-- 当前章节是不是 `<= 1`
-- 是否已有 recent summaries / arc / volume summary
-- 是否存在 `chapter_plan` 或 `current_outline`
-- `writer.Context.Strategy` 最终记录的是不是 `full_summary`
+- Chương hiện tại có phải `<= 1` không
+- Đã có recent summaries / arc / volume summary chưa
+- Có tồn tại `chapter_plan` hoặc `current_outline` không
+- `writer.Context.Strategy` cuối cùng ghi lại có phải `full_summary` không
 
-#### 场景 4：恢复后上下文不够
+#### Tình huống 4: Ngữ cảnh không đủ sau khi khôi phục
 
-先看：
+Xem trước:
 
-- handoff 是否生成
-- restore pack 是否刷新
-- recovery prompt 是否注入 handoff
+- handoff có được tạo không
+- restore pack có được làm mới không
+- recovery prompt có tiêm handoff không
 
-#### 场景 5：工具结果太多导致上下文膨胀
+#### Tình huống 5: Kết quả công cụ quá nhiều khiến ngữ cảnh phình to
 
-先看：
+Xem trước:
 
-- `ToolResultMicrocompact` 是否命中
-- `IdleThreshold` 是否生效
+- `ToolResultMicrocompact` có khớp không
+- `IdleThreshold` có hiệu lực không
 
-## 11. 当前实现的取舍
+## 11. Các đánh đổi trong triển khai hiện tại
 
-### 已明确坚持的方向
+### Các hướng đã xác định rõ sẽ giữ
 
-1. 不把小说业务逻辑塞进 `agentcore`
-2. 优先依赖结构化 store，而不是聊天历史
-3. Writer 使用专门的小说摘要 prompt
-4. 压缩与恢复尽量共用 builder，避免口径漂移
+1. Không nhét logic nghiệp vụ tiểu thuyết vào `agentcore`
+2. Ưu tiên dựa vào Store có cấu trúc, không phải lịch sử chat
+3. Người viết dùng prompt tóm tắt tiểu thuyết chuyên biệt
+4. Nén và khôi phục dùng chung builder nhất có thể, tránh phân kỳ khẩu径
 
-### 当前仍然有意保留的限制
+### Các giới hạn hiện tại vẫn cố ý giữ lại
 
-1. `StoreSummaryCompact` 只给 Writer 用
-2. 第一章不会命中 store-based compact
-3. store 数据不足时仍然回退到 `FullSummary`
-4. `writerRestorePack` 是追加式补偿，不替代 `FullSummary`
+1. `StoreSummaryCompact` chỉ dùng cho Người viết
+2. Chương đầu tiên không khớp store-based compact
+3. Khi dữ liệu Store không đủ vẫn fallback về `FullSummary`
+4. `writerRestorePack` là bù đắp nối thêm, không thay thế `FullSummary`
 
-这些限制不是缺陷，而是当前阶段为了控制复杂度做的边界。
+Những giới hạn này không phải khiếm khuyết, mà là ranh giới được đặt ra để kiểm soát độ phức tạp trong giai đoạn hiện tại.
 
-## 12. 一句话总结
+## 12. Tóm tắt một câu
 
-本项目的上下文管理不是“把长对话压短”这么简单，而是：
+Quản lý ngữ cảnh của dự án này không đơn giản là "nén hội thoại dài thành ngắn", mà là:
 
-`优先用结构化小说记忆维持连续性，在必要时才让 LLM 去摘要对话；并且在压缩、恢复、交接三个环节都尽量依赖同一套持久化工件。`
+`Ưu tiên dùng bộ nhớ tiểu thuyết có cấu trúc để duy trì tính liên tục, chỉ để LLM tóm tắt hội thoại khi thực sự cần thiết; và trong cả ba giai đoạn nén, khôi phục, bàn giao đều cố gắng tối đa dựa vào cùng một bộ sản phẩm lưu trữ.`
 
-如果你后续要改这套系统，优先守住下面三条：
+Nếu bạn muốn thay đổi hệ thống này sau này, hãy ưu tiên giữ ba điều sau:
 
-1. 不要让 Writer 的关键记忆再次只依赖聊天历史。
-2. 不要让 `store_summary` 和 `writer_restore` 口径分叉。
-3. 出现连续性问题时，先查结构化工件有没有进入上下文，再决定是否改 prompt。
+1. Không để bộ nhớ quan trọng của Người viết lại chỉ phụ thuộc vào lịch sử chat.
+2. Không để `store_summary` và `writer_restore` phân kỳ khẩu径.
+3. Khi xuất hiện vấn đề về tính liên tục, trước tiên kiểm tra xem sản phẩm có cấu trúc có đi vào ngữ cảnh không, rồi mới quyết định có cần sửa prompt không.

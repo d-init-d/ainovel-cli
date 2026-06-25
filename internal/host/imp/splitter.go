@@ -9,26 +9,27 @@ import (
 	"github.com/voocel/ainovel-cli/internal/utils"
 )
 
-// 默认章节标题正则。覆盖常见中文（第N章/回/话/卷/节/幕、卷N、序章/楔子/尾声/番外/外传 等）
-// 与英文（Chapter N、Prologue、Epilogue）标题，兼容 Markdown 标题前缀（# / ##）、
-// 起点系 txt 的「正文 第N章」前缀、以及【】〖〗包裹的标题。
+// defaultChapterRegex là regex mặc định để nhận dạng tiêu đề chương. Bao quát các dạng phổ biến:
+// tiếng Trung (第N章/回/话/卷/节/幕、卷N、序章/楔子/尾声/番外/外传, v.v.)
+// và tiếng Anh (Chapter N, Prologue, Epilogue), tương thích tiền tố Markdown (# / ##),
+// tiền tố "正文 第N章" trong txt kiểu Qidian, cũng như tiêu đề được bọc trong【】〖〗.
 //
-// 命名分组：副标题组优先于关键词组（提取时按 priority 顺序回退）：
-//   - cn    编号章节副标题（第X章/回/话/卷/节/幕 之后的文字）
-//   - vol   独立卷副标题（卷X 之后的文字）
-//   - sp    特殊单元副标题（序章/楔子/尾声/番外 之后的文字）
-//   - en    英文章节副标题（Chapter X / Prologue / Epilogue 之后的文字）
-//   - spkw  特殊单元关键词本身（无副标题时作标题，如「楔子」「番外」）
-//   - enkw  英文特殊单元关键词本身（无副标题时作标题，如「Prologue」）
+// Nhóm đặt tên: nhóm phụ đề ưu tiên hơn nhóm từ khóa (khi trích xuất sẽ fallback theo thứ tự priority):
+//   - cn    phụ đề chương số tiếng Trung (văn bản sau 第X章/回/话/卷/节/幕)
+//   - vol   phụ đề tập độc lập (văn bản sau 卷X)
+//   - sp    phụ đề đơn vị đặc biệt (văn bản sau 序章/楔子/尾声/番外)
+//   - en    phụ đề chương tiếng Anh (văn bản sau Chapter X / Prologue / Epilogue)
+//   - spkw  từ khóa đơn vị đặc biệt (dùng làm tiêu đề khi không có phụ đề, ví dụ「楔子」「番外」)
+//   - enkw  từ khóa đơn vị đặc biệt tiếng Anh (dùng làm tiêu đề khi không có phụ đề, ví dụ「Prologue」)
 
-// ws 是字符类内容：ASCII 空白 + 全角空格。Go RE2 的 \s 只含 ASCII 空白，
-// 而中文排版的标题分隔常用 U+3000（「第一章　风起」）。
+// ws là nội dung lớp ký tự: khoảng trắng ASCII + khoảng trắng toàn góc. \s trong Go RE2 chỉ chứa
+// khoảng trắng ASCII, trong khi tiêu đề sắp chữ tiếng Trung thường dùng U+3000（「第一章　风起」）.
 const ws = `\s\x{3000}`
 
-// cnNum 是章节编号可用的数字字符：阿拉伯 / 全角 / 中文小写 / 中文大写繁体（壹贰叁…萬）。
+// cnNum là các ký tự số dùng được trong số thứ tự chương: Ả Rập / toàn góc / chữ Trung nhỏ / chữ Trung lớn phồn thể（壹贰叁…萬）.
 const cnNum = `零〇○Ｏ０一二三四五六七八九十百千万两壹贰貳叁參肆伍陆陸柒捌玖拾佰仟萬兩\d`
 
-// sub 是副标题捕获：取到行尾，但不吞掉右包裹符（】〗），留给结尾的可选闭括号。
+// sub là phần bắt phụ đề: lấy đến cuối dòng, nhưng không nuốt ký tự đóng ngoặc phải（】〗）, để lại cho dấu ngoặc đóng tùy chọn ở cuối.
 const sub = `[^】〗\n]*`
 
 var defaultChapterRegex = regexp.MustCompile(
@@ -47,7 +48,7 @@ var defaultChapterRegex = regexp.MustCompile(
 		`)[` + ws + `]*[】〗]?[` + ws + `]*$`,
 )
 
-// SplitFile 把单个文本文件切分成章节列表。
+// SplitFile tách một file văn bản thành danh sách các chương.
 func SplitFile(path string) ([]Chapter, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -60,7 +61,7 @@ func SplitFile(path string) ([]Chapter, error) {
 	return splitText(text, defaultChapterRegex), nil
 }
 
-// splitText 是纯函数版切分，便于单测。
+// splitText là hàm thuần túy để tách, tiện cho unit test.
 func splitText(text string, pattern *regexp.Regexp) []Chapter {
 	lines := strings.Split(text, "\n")
 	type marker struct {
@@ -94,7 +95,7 @@ func splitText(text string, pattern *regexp.Regexp) []Chapter {
 	return chapters
 }
 
-// extractTitle 从匹配行提取章节标题；优先取命名捕获，否则回退章节号占位。
+// extractTitle trích xuất tiêu đề chương từ dòng khớp; ưu tiên lấy nhóm đặt tên, nếu không có thì fallback về số thứ tự chương.
 func extractTitle(line string, pattern *regexp.Regexp, loc []int, fallbackNum int) string {
 	subnames := pattern.SubexpNames()
 	priority := []string{"cn", "vol", "sp", "en", "spkw", "enkw"}
@@ -110,7 +111,7 @@ func extractTitle(line string, pattern *regexp.Regexp, loc []int, fallbackNum in
 			return t
 		}
 	}
-	// 兜底：取第一个非空捕获组（防御性，默认正则的命名组已覆盖各分支）
+	// Dự phòng: lấy nhóm bắt đầu tiên không rỗng (phòng thủ, các nhóm đặt tên của regex mặc định đã bao quát tất cả nhánh)
 	for i := 1; i < len(subnames); i++ {
 		if loc[2*i] < 0 {
 			continue
@@ -122,7 +123,7 @@ func extractTitle(line string, pattern *regexp.Regexp, loc []int, fallbackNum in
 	return fmt.Sprintf("第%d章", fallbackNum)
 }
 
-// stripTrailingNoise 剥离常见的尾部噪声（Project Gutenberg 等 license trailer）。
+// stripTrailingNoise loại bỏ nhiễu đuôi phổ biến (ví dụ: đoạn license của Project Gutenberg, v.v.).
 var trailerRe = regexp.MustCompile(`(?im)^\s*Project Gutenberg(?:\(TM\)|™)?[\s\S]*$`)
 
 func stripTrailingNoise(content string) string {

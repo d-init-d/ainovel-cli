@@ -1,8 +1,11 @@
-// Package stylestat 对已写正文做全书级风格统计，产出纯事实。
+// Package stylestat thực hiện thống kê phong cách toàn bộ tác phẩm dựa trên phần chính văn đã viết,
+// chỉ xuất ra các con số thực tế khách quan.
 //
-// 动机：弧内评审窗口（~10 章）对全书级模式固化天然失明——句式 tic 章均几十次、
-// 章末形态同构、跨章复读，单章看每处都"正常"，只有全书统计能暴露。统计归代码
-//（确定性、零幻觉），裁定归 LLM（editor 按数字判维度分，writer 据此自避免）。
+// Động lực: Cửa sổ đánh giá nội cung (~10 chương) vốn mù với các khuôn mẫu cố định ở cấp toàn tác phẩm —
+// tic câu trúc có thể xuất hiện vài chục lần mỗi chương, cuối chương đồng dạng, lặp lại xuyên chương.
+// Nhìn từng chương riêng lẻ thì mỗi chỗ đều "bình thường", chỉ thống kê toàn tác phẩm mới phơi bày được.
+// Thống kê giao cho code (xác định, không ảo giác), phán xét giao cho LLM (editor căn cứ số liệu
+// để đánh giá từng chiều, writer dựa đó tự tránh).
 package stylestat
 
 import (
@@ -11,21 +14,23 @@ import (
 	"strings"
 )
 
-// minChapters 少于此章数不出统计——样本太小，频率没有意义。
+// minChapters — ít hơn số chương này thì không xuất thống kê: mẫu quá nhỏ, tần suất không có ý nghĩa.
 const minChapters = 5
 
-// phraseWindow 动态短语挖掘只看最近 N 章：writer 需要避免的是"现在的口头禅"。
+// phraseWindow — khai thác cụm từ động chỉ xét N chương gần nhất: writer cần tránh "cửa miệng hiện tại".
 const phraseWindow = 20
 
-// Input 统计输入。Chapters 按章号升序；Stopwords 为角色名等专有名词，
-// 动态短语挖掘时跳过（出场人名天然高频，不是文风问题）。
+// Input là dữ liệu đầu vào để thống kê. Chapters xếp tăng dần theo số chương; Stopwords là
+// danh từ riêng như tên nhân vật — bỏ qua khi khai thác cụm từ động (tên xuất hiện tự nhiên
+// có tần suất cao, không phải vấn đề phong cách).
 type Input struct {
 	Chapters  []string
 	Titles    []string
 	Stopwords []string
 }
 
-// Stats 全书风格统计结果。所有字段都是事实计数，不含任何裁定或指令。
+// Stats là kết quả thống kê phong cách toàn tác phẩm. Tất cả trường đều là số liệu thực tế,
+// không chứa bất kỳ nhận định hay chỉ thị nào.
 type Stats struct {
 	Chapters          int            `json:"chapters"`
 	Patterns          []PatternStat  `json:"patterns,omitempty"`
@@ -36,48 +41,50 @@ type Stats struct {
 	TitleFormats      *TitleStat     `json:"title_formats,omitempty"`
 }
 
-// PatternStat 固定句式模式类的全书计数（通用 AI 文风 tic）。
+// PatternStat là số đếm toàn tác phẩm cho một lớp khuôn câu cố định (tic văn phong AI phổ biến).
 type PatternStat struct {
 	Name       string  `json:"name"`
 	Total      int     `json:"total"`
 	PerChapter float64 `json:"per_chapter"`
 }
 
-// PhraseStat 最近 phraseWindow 章内挖掘出的高频短语。
+// PhraseStat là cụm từ xuất hiện nhiều được khai thác trong phraseWindow chương gần nhất.
 type PhraseStat struct {
 	Text  string `json:"text"`
 	Count int    `json:"count"`
 }
 
-// SentenceStat 跨章逐字重复的长句（复读交代的直接证据）。
+// SentenceStat là câu dài lặp lại từng chữ xuyên nhiều chương (bằng chứng trực tiếp của lặp lại phơi bày).
 type SentenceStat struct {
 	Text     string `json:"text"`
 	Chapters int    `json:"chapters"`
 	Count    int    `json:"count"`
 }
 
-// EndingStat 章末行形态分布。短结尾本身合法，全书同构才是问题。
+// EndingStat là phân bố hình thức dòng cuối chương. Kết thúc ngắn tự nó hợp lệ,
+// chỉ khi đồng dạng toàn tác phẩm mới là vấn đề.
 type EndingStat struct {
 	ShortRatio  float64 `json:"short_ratio"`
 	MedianRunes int     `json:"median_runes"`
 }
 
-// TitleStat 章节标题「第N章」前缀混用计数（混用=机制痕迹暴露在产物里）。
+// TitleStat là số đếm việc dùng lẫn lộn tiền tố "Chương N" trong tiêu đề chương
+// (dùng lẫn = dấu vết cơ chế lộ ra trong sản phẩm).
 type TitleStat struct {
 	WithPrefix    int `json:"with_prefix"`
 	WithoutPrefix int `json:"without_prefix"`
 }
 
-// patternDefs 通用 AI 文风句式模式。计数是近似（正则不做语法分析），
-// 用途是本书自身的纵向基线对比，绝对精度不重要。
+// patternDefs là các khuôn câu AI phổ biến. Số đếm là xấp xỉ (regex không phân tích ngữ pháp),
+// mục đích là so sánh theo chiều dọc với đường cơ sở của chính tác phẩm, độ chính xác tuyệt đối không quan trọng.
 var patternDefs = []struct {
 	name string
 	re   *regexp.Regexp
 }{
-	{"矫正句『不是…(而)是…』", regexp.MustCompile(`不是[^。！？\n]{1,24}?[，、]?(?:而)?是`)},
-	{"计时量词『X息/X瞬』", regexp.MustCompile(`[一两二三四五六七八九十几数半][息瞬]`)},
-	{"明喻『像一/仿佛/如同/宛如』", regexp.MustCompile(`像一|仿佛|如同|宛如`)},
-	{"沉默节拍『沉默了/没有说话/没有回头』", regexp.MustCompile(`沉默了|没有说话|没有回头`)},
+	{"Câu chỉnh chuẩn『不是…(而)是…』", regexp.MustCompile(`不是[^。！？\n]{1,24}?[，、]?(?:而)?是`)},
+	{"Lượng từ thời gian『X息/X瞬』", regexp.MustCompile(`[一两二三四五六七八九十几数半][息瞬]`)},
+	{"So sánh trực tiếp『像一/仿佛/如同/宛如』", regexp.MustCompile(`像一|仿佛|如同|宛如`)},
+	{"Nhịp im lặng『沉默了/没有说话/没有回头』", regexp.MustCompile(`沉默了|没有说话|没有回头`)},
 }
 
 var (
@@ -86,10 +93,10 @@ var (
 	titlePrefixRe = regexp.MustCompile(`^#{0,2}\s*第[零〇一二三四五六七八九十百千万\d]+章`)
 )
 
-// shortEndingRunes 末行不超过此字数计为"短结尾"。
+// shortEndingRunes — dòng cuối không vượt quá số ký tự này thì tính là "kết thúc ngắn".
 const shortEndingRunes = 30
 
-// Compute 计算全书风格统计；章数不足时返回 nil。
+// Compute tính thống kê phong cách toàn tác phẩm; trả về nil nếu số chương chưa đủ.
 func Compute(in Input) *Stats {
 	n := len(in.Chapters)
 	if n < minChapters {
@@ -124,8 +131,9 @@ func recentWindow(chapters []string) []string {
 	return chapters[len(chapters)-phraseWindow:]
 }
 
-// minePhrases 在窗口内挖掘 3-6 字高频短语。
-// 过滤：含标点/空白、首尾虚词、命中专有名词；去重：与已选短语互为子串的丢弃。
+// minePhrases khai thác các cụm từ 3–6 ký tự xuất hiện nhiều trong cửa sổ.
+// Lọc: có dấu câu/khoảng trắng, hư từ/đại từ ở đầu/cuối, trùng danh từ riêng;
+// loại trùng: cụm nào là chuỗi con của cụm đã chọn thì bỏ.
 func minePhrases(chapters []string, stopwords []string) []PhraseStat {
 	text := strings.Join(chapters, "\n")
 	runes := []rune(text)
@@ -158,7 +166,7 @@ func minePhrases(chapters []string, stopwords []string) []PhraseStat {
 		if cands[i].count != cands[j].count {
 			return cands[i].count > cands[j].count
 		}
-		// 同频取更长的（信息量更大），再按字典序稳定排序
+		// Cùng tần suất thì ưu tiên cụm dài hơn (thông tin nhiều hơn), sau đó sắp xếp từ điển để ổn định
 		if len(cands[i].text) != len(cands[j].text) {
 			return len(cands[i].text) > len(cands[j].text)
 		}
@@ -184,12 +192,12 @@ func minePhrases(chapters []string, stopwords []string) []PhraseStat {
 	return out
 }
 
-// gramEdgeStop 首尾为这些虚词/代词的 n-gram 不是文风短语，跳过。
+// gramEdgeStop — n-gram có hư từ/đại từ ở đầu hoặc cuối không phải cụm từ phong cách, bỏ qua.
 const gramEdgeStop = "的了着是在和与就也都还又把被他她它我你这那"
 
 func validGram(gram []rune) bool {
 	for _, r := range gram {
-		if r < 0x4E00 || r > 0x9FFF { // 仅纯汉字片段
+		if r < 0x4E00 || r > 0x9FFF { // chỉ chấp nhận đoạn thuần Hán tự
 			return false
 		}
 	}
@@ -199,9 +207,10 @@ func validGram(gram []rune) bool {
 	return true
 }
 
-// stopwordBigrams 把专有名词拆成 2 字片段：人名常以部分形式入文
-//（"九渊负手"含"九渊"），按整名匹配会漏网。宁可过滤偏严——短语事实少一条
-// 无碍，人名混进口头禅清单才是噪声。
+// stopwordBigrams tách danh từ riêng thành các mảnh 2 ký tự: tên người thường xuất hiện
+// một phần trong văn ("Cửu Uyên chắp tay" chứa "Cửu Uyên"), khớp theo tên đầy đủ sẽ bỏ sót.
+// Thà lọc nghiêm hơn — bớt một cụm từ thực tế không sao, còn tên người lọt vào danh sách
+// cửa miệng mới là nhiễu.
 func stopwordBigrams(stopwords []string) []string {
 	var grams []string
 	for _, w := range stopwords {
@@ -225,7 +234,7 @@ func hitStopword(gram string, stopGrams []string) bool {
 	return false
 }
 
-// repeatedSentences 找跨 ≥3 章逐字重复的 ≥12 字句子，按次数取 top 5。
+// repeatedSentences tìm các câu ≥12 ký tự lặp lại từng chữ xuyên ≥3 chương, lấy top 5 theo số lần.
 func repeatedSentences(chapters []string) []SentenceStat {
 	type rec struct {
 		count    int
@@ -234,8 +243,8 @@ func repeatedSentences(chapters []string) []SentenceStat {
 	seen := make(map[string]*rec)
 	for ci, text := range chapters {
 		for _, sent := range sentenceSplit.Split(text, -1) {
-			// 剥掉包裹引号再归并：同一句台词带/不带前引号不应算成两条
-			sent = strings.Trim(strings.TrimSpace(sent), `"“”‘’「」『』`)
+			// Bỏ dấu ngoặc kép bao quanh rồi gộp: cùng một câu thoại có/không có ngoặc mở không nên tính là hai câu khác
+			sent = strings.Trim(strings.TrimSpace(sent), `"""''「」『』`)
 			if len([]rune(sent)) < 12 {
 				continue
 			}
@@ -317,7 +326,7 @@ func titleFormats(titles []string) *TitleStat {
 			t.WithoutPrefix++
 		}
 	}
-	// 只有混用才值得上报；统一格式不是事实意义上的问题
+	// Chỉ báo cáo khi có dùng lẫn lộn; định dạng đồng nhất không phải vấn đề thực tế
 	if t.WithPrefix == 0 || t.WithoutPrefix == 0 {
 		return nil
 	}
@@ -334,7 +343,8 @@ func lastNonEmptyLine(text string) string {
 	return ""
 }
 
-// firstParagraph 取第一个非空且非 Markdown 标题的行（章文件首行常是 # 标题）。
+// firstParagraph lấy dòng đầu tiên không rỗng và không phải tiêu đề Markdown
+// (dòng đầu file chương thường là tiêu đề # ).
 func firstParagraph(text string) string {
 	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)

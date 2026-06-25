@@ -31,7 +31,7 @@ func TestBudgetSentinelDisabled(t *testing.T) {
 	if s := r.sentinel(bootstrap.BudgetConfig{}); s != nil {
 		t.Fatal("disabled budget should return nil sentinel")
 	}
-	// nil 安全
+	// an toàn với nil
 	var s *BudgetSentinel
 	s.OnCost(100)
 	s.HandleEvent(subagentEndEvent())
@@ -47,20 +47,20 @@ func TestBudgetSentinelWarnOnceThenBoundaryStop(t *testing.T) {
 	r := &budgetRecorder{}
 	s := r.sentinel(bootstrap.BudgetConfig{BookUSD: 10, WarnRatio: 0.8})
 
-	// 未到水位：无副作用
+	// chưa đến ngưỡng: không có tác dụng phụ
 	s.OnCost(5)
 	if len(r.reports) != 0 {
 		t.Fatalf("below warn ratio should be silent, got %v", r.reports)
 	}
 
-	// 越过告警水位：恰好一次 warn，重复回调不再发
+	// vượt ngưỡng cảnh báo: đúng một lần warn, gọi lại không phát thêm
 	s.OnCost(8.5)
 	s.OnCost(9)
 	if len(r.reports) != 1 || !strings.HasPrefix(r.reports[0], "warn:") {
 		t.Fatalf("expected exactly one warn, got %v", r.reports)
 	}
 
-	// 越线：进入 stopPending，发 error，但不立即停（默认等边界）
+	// vượt giới hạn: vào trạng thái stopPending, phát error, nhưng chưa dừng ngay (mặc định chờ đến ranh giới)
 	s.OnCost(10.5)
 	if len(r.reports) != 2 || !strings.HasPrefix(r.reports[1], "error:") {
 		t.Fatalf("expected error report on exceeding, got %v", r.reports)
@@ -69,13 +69,13 @@ func TestBudgetSentinelWarnOnceThenBoundaryStop(t *testing.T) {
 		t.Fatalf("default mode should not abort before boundary, got %v", r.aborts)
 	}
 
-	// 非边界事件不触发
+	// sự kiện không phải ranh giới thì không kích hoạt
 	s.HandleEvent(agentcore.Event{Type: agentcore.EventToolExecEnd, Tool: "novel_context"})
 	if len(r.aborts) != 0 {
 		t.Fatal("non-subagent boundary should not trigger stop")
 	}
 
-	// 子代理边界：恰好一次停机，重复边界不再停
+	// ranh giới SubAgent: đúng một lần dừng, lặp lại ranh giới không dừng thêm
 	r.cost = 10.5
 	s.HandleEvent(subagentEndEvent())
 	s.HandleEvent(subagentEndEvent())
@@ -88,7 +88,7 @@ func TestBudgetSentinelJumpStraightPastLimit(t *testing.T) {
 	r := &budgetRecorder{}
 	s := r.sentinel(bootstrap.BudgetConfig{BookUSD: 10, WarnRatio: 0.8})
 
-	// 一次回调直接跨过告警与上限：warn 与 error 各恰好一次
+	// một lần gọi vượt thẳng qua cả ngưỡng cảnh báo lẫn giới hạn: mỗi loại đúng một lần warn và error
 	s.OnCost(12)
 	if len(r.reports) != 2 {
 		t.Fatalf("expected warn+error in single jump, got %v", r.reports)
@@ -103,7 +103,7 @@ func TestBudgetSentinelHardStop(t *testing.T) {
 	if len(r.aborts) != 1 {
 		t.Fatalf("hard_stop should abort immediately, got %v", r.aborts)
 	}
-	// 后续边界不再重复停
+	// ranh giới tiếp theo không dừng lại thêm lần nữa
 	r.cost = 11
 	s.HandleEvent(subagentEndEvent())
 	if len(r.aborts) != 1 {
@@ -118,7 +118,7 @@ func TestBudgetSentinelRefuse(t *testing.T) {
 	if err := s.Refuse(); err != nil {
 		t.Errorf("below limit should pass: %v", err)
 	}
-	r.cost = 10 // 恰好等于上限 → 拒绝
+	r.cost = 10 // đúng bằng giới hạn → từ chối
 	if err := s.Refuse(); err == nil {
 		t.Error("at limit should refuse")
 	} else if !strings.Contains(err.Error(), "book_usd") {
@@ -130,42 +130,42 @@ func TestBudgetSentinelZeroCostBlindWarning(t *testing.T) {
 	r := &budgetRecorder{}
 	s := r.sentinel(bootstrap.BudgetConfig{BookUSD: 10, WarnRatio: 0.8})
 
-	// 连续零成本记账：到 blindZeroStreak 笔时恰好一次盲区告警，之后静默
+	// ghi nhận chi phí bằng 0 liên tiếp: đến blindZeroStreak lần thì phát đúng một lần cảnh báo vùng mù, sau đó im lặng
 	for range blindZeroStreak + 3 {
 		s.OnCost(0)
 	}
-	if len(r.reports) != 1 || !strings.Contains(r.reports[0], "预算盲区") {
+	if len(r.reports) != 1 || !strings.Contains(r.reports[0], "vùng mù ngân sách") {
 		t.Fatalf("expected exactly one blind warning, got %v", r.reports)
 	}
 	if len(r.aborts) != 0 {
 		t.Fatal("blind warning must not abort")
 	}
 
-	// 正常计价模型不应误报：每笔记账总额递增
+	// mô hình có tính phí không nên báo nhầm: tổng chi phí tăng dần theo từng lần ghi nhận
 	r2 := &budgetRecorder{}
 	s2 := r2.sentinel(bootstrap.BudgetConfig{BookUSD: 10, WarnRatio: 0.8})
 	for i := range blindZeroStreak + 3 {
 		s2.OnCost(0.1 * float64(i+1))
 	}
 	for _, rep := range r2.reports {
-		if strings.Contains(rep, "盲区") {
+		if strings.Contains(rep, "vùng mù") {
 			t.Fatalf("priced model should not trigger blind warning: %v", r2.reports)
 		}
 	}
 }
 
 func TestBudgetSentinelBlindWarningAfterModelSwitch(t *testing.T) {
-	// 长跑中途 /model 切到无价模型：total 停在历史值非零但不再增长，同样要告警
+	// giữa chừng chạy dài /model chuyển sang mô hình không có giá: total dừng ở giá trị lịch sử khác 0 nhưng không tăng nữa, vẫn phải cảnh báo
 	r := &budgetRecorder{}
 	s := r.sentinel(bootstrap.BudgetConfig{BookUSD: 100, WarnRatio: 0.8})
 
 	for i := range 5 {
-		s.OnCost(1.0 * float64(i+1)) // 计价阶段：总额递增到 $5
+		s.OnCost(1.0 * float64(i+1)) // giai đoạn tính phí: tổng tăng dần đến $5
 	}
 	for range blindZeroStreak {
-		s.OnCost(5.0) // 切到无价模型：总额钉死
+		s.OnCost(5.0) // chuyển sang mô hình không có giá: tổng bị kẹt cố định
 	}
-	if len(r.reports) != 1 || !strings.Contains(r.reports[0], "盲区") {
+	if len(r.reports) != 1 || !strings.Contains(r.reports[0], "vùng mù") {
 		t.Fatalf("expected blind warning after switch to unpriced model, got %v", r.reports)
 	}
 }

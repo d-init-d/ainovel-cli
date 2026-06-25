@@ -7,23 +7,23 @@ import (
 	"github.com/voocel/ainovel-cli/internal/store"
 )
 
-// ── 诊断阈值 ─────────────────────────────────────────────
+// ── Ngưỡng chẩn đoán ─────────────────────────────────────────────
 
 const (
-	ThresholdDimScoreLow      = 70  // ChronicLowDimension: 维度均分低于此值告警
-	ThresholdContractMissRate = 0.3 // ContractMissPattern: 合同未达成率上限
-	ThresholdRewriteRate      = 0.5 // ExcessiveRewrites: 改写率上限
-	ThresholdWordShortRatio   = 0.4 // WordCountAnomaly: 字数低于均值此比例视为异常
-	ThresholdWordLongRatio    = 2.5 // WordCountAnomaly: 字数高于均值此比例视为异常
-	ThresholdHookWeakScore    = 75  // HookWeakChain: hook 低于此分视为偏弱
-	ThresholdHookWeakChain    = 3   // HookWeakChain: 连续偏弱章数阈值
-	ThresholdPayoffMissRate   = 0.4 // PayoffMissPattern: payoff 未兑现率上限
-	ThresholdCompassDrift     = 15  // CompassDrift: 指南针未更新章数上限
-	ThresholdTimelineGapRate  = 0.3 // TimelineGaps: 缺失率容忍上限
-	ThresholdForeshadowMin    = 8   // StaleForeshadow: 伏笔停滞最小章数
+	ThresholdDimScoreLow      = 70  // ChronicLowDimension: cảnh báo khi điểm trung bình các chiều thấp hơn giá trị này
+	ThresholdContractMissRate = 0.3 // ContractMissPattern: tỉ lệ hợp đồng không đạt tối đa
+	ThresholdRewriteRate      = 0.5 // ExcessiveRewrites: tỉ lệ viết lại tối đa
+	ThresholdWordShortRatio   = 0.4 // WordCountAnomaly: số từ thấp hơn giá trị trung bình theo tỉ lệ này bị coi là bất thường
+	ThresholdWordLongRatio    = 2.5 // WordCountAnomaly: số từ cao hơn giá trị trung bình theo tỉ lệ này bị coi là bất thường
+	ThresholdHookWeakScore    = 75  // HookWeakChain: hook dưới điểm này bị coi là yếu
+	ThresholdHookWeakChain    = 3   // HookWeakChain: ngưỡng số chương liên tiếp yếu
+	ThresholdPayoffMissRate   = 0.4 // PayoffMissPattern: tỉ lệ payoff chưa được thực hiện tối đa
+	ThresholdCompassDrift     = 15  // CompassDrift: số chương tối đa chưa cập nhật la bàn
+	ThresholdTimelineGapRate  = 0.3 // TimelineGaps: tỉ lệ thiếu hụt dung sai tối đa
+	ThresholdForeshadowMin    = 8   // StaleForeshadow: số chương tối thiểu để phục bút bị coi là đình trệ
 )
 
-// allRules 按 flow → quality → planning → context 排列。
+// allRules sắp xếp theo thứ tự: flow → quality → planning → context.
 var allRules = []RuleFunc{
 	// Flow
 	InvalidPendingRewrites,
@@ -49,7 +49,7 @@ var allRules = []RuleFunc{
 	RelationshipStagnation,
 }
 
-// Analyze 是诊断系统的唯一入口。
+// Analyze là điểm vào duy nhất của hệ thống chẩn đoán.
 func Analyze(s *store.Store) Report {
 	snap := Load(s)
 
@@ -62,8 +62,8 @@ func Analyze(s *store.Store) Report {
 			Confidence: ConfHigh,
 			AutoLevel:  AutoNone,
 			Target:     "runtime.flow",
-			Title:      fmt.Sprintf("工件加载失败: %s", e),
-			Suggestion: "文件可能损坏或权限不足，相关诊断规则的结果可能不完整。",
+			Title:      fmt.Sprintf("Tải sản phẩm thất bại: %s", e),
+			Suggestion: "Tệp có thể bị hỏng hoặc thiếu quyền truy cập, kết quả của các quy tắc chẩn đoán liên quan có thể không đầy đủ.",
 		})
 	}
 	for _, rule := range allRules {
@@ -98,7 +98,7 @@ func buildStats(snap *Snapshot) Stats {
 		st.PlanningTier = string(snap.RunMeta.PlanningTier)
 	}
 
-	// 评审统计
+	// Thống kê đánh giá
 	st.ReviewCount = len(snap.Reviews)
 	var totalScore float64
 	var dimCount int
@@ -115,7 +115,7 @@ func buildStats(snap *Snapshot) Stats {
 		st.AvgReviewScore = totalScore / float64(dimCount)
 	}
 
-	// 伏笔统计
+	// Thống kê phục bút
 	latest := snap.LatestCompleted()
 	for _, f := range snap.Foreshadow {
 		if f.Status == "planted" || f.Status == "advanced" {
@@ -128,7 +128,7 @@ func buildStats(snap *Snapshot) Stats {
 	return st
 }
 
-// sortFindings 按严重程度排序：critical > warning > info。
+// sortFindings sắp xếp theo mức độ nghiêm trọng: critical > warning > info.
 func sortFindings(findings []Finding) {
 	order := map[Severity]int{SevCritical: 0, SevWarning: 1, SevInfo: 2}
 	sort.SliceStable(findings, func(i, j int) bool {
@@ -136,7 +136,7 @@ func sortFindings(findings []Finding) {
 	})
 }
 
-// staleForeshadowThreshold 根据总章节数计算伏笔停滞阈值。
+// staleForeshadowThreshold tính ngưỡng đình trệ phục bút dựa trên tổng số chương.
 func staleForeshadowThreshold(completedChapters int) int {
 	t := completedChapters / 3
 	if t < ThresholdForeshadowMin {

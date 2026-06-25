@@ -10,46 +10,46 @@ import (
 	storepkg "github.com/voocel/ainovel-cli/internal/store"
 )
 
-// Dispatcher 订阅 Coordinator 事件，在子代理返回时计算路由并下达 Host 指令。
+// Dispatcher đăng ký lắng nghe sự kiện từ Coordinator, tính toán tuyến đường khi agent phụ trả về và gửi lệnh cho Host.
 //
-// 生命周期：Attach 返回一个 detach 函数；关闭 Host 时调用释放订阅。
+// Vòng đời: Attach trả về một hàm detach; gọi hàm đó khi đóng Host để giải phóng đăng ký.
 type Dispatcher struct {
 	coordinator *agentcore.Agent
 	store       *storepkg.Store
 
-	enabled atomic.Bool // 由 Host 控制是否派发（启动完成前应关）
+	enabled atomic.Bool // do Host kiểm soát có phát lệnh hay không (nên tắt trước khi khởi động xong)
 
-	// 重复追踪：记住最近一次派发的 Agent+Task 与连续下达次数。
-	// 同一指令重复计算（子代理返回后状态未推进，Route 重算结果不变）不静默吞掉，
-	// 而是带次数事实重发——"路由结果连续 N 次相同"是只有 Host 能观测到的事实；
-	// 若沉默，Coordinator 会陷入"禁止自行决定下一步"（coordinator.md）与
-	// "禁止停机"（StopGuard）的双重矛盾，自由发挥即 #24 类 freelance 死循环。
-	// 裁定权仍在 LLM：重发消息只附事实与核对许可，不设阈值、不熔断（架构 §10.13）。
-	// 消息因带次数而互不相同，不会把字面相同的指令重复压进 followUpQ。
+	// Theo dõi lặp: ghi nhớ Agent+Task đã phát lần gần nhất và số lần phát liên tiếp.
+	// Cùng một lệnh tính lại (agent phụ trả về nhưng trạng thái chưa tiến, Route tính lại ra cùng kết quả) không bị nuốt yên lặng,
+	// mà được phát lại kèm số lần thực tế — "kết quả route liên tiếp N lần giống nhau" là sự thật chỉ Host quan sát được;
+	// nếu im lặng, Coordinator sẽ rơi vào mâu thuẫn giữa "cấm tự quyết bước tiếp theo" (coordinator.md) và
+	// "cấm dừng máy" (StopGuard), tự do hành động sẽ dẫn đến vòng lặp freelance kiểu #24.
+	// Quyền phán quyết vẫn thuộc LLM: tin phát lại chỉ kèm sự thật và cho phép kiểm tra, không đặt ngưỡng, không ngắt mạch (kiến trúc §10.13).
+	// Vì tin có kèm số lần nên mỗi lần khác nhau, không bị ép lệnh giống hệt vào followUpQ nhiều lần.
 	lastMu   sync.Mutex
 	lastSent *Instruction
 	repeats  int
 
-	// onRepeat 是纯 telemetry 回调（无人值守告警用），在同一指令第 repeatNotifyAt
-	// 次下达时触发一次；不反向影响派发，派发逻辑对它的存在无感知。
+	// onRepeat là callback telemetry thuần túy (dùng cho cảnh báo chế độ không giao diện), kích hoạt một lần
+	// khi cùng một lệnh được phát đến lần thứ repeatNotifyAt; không ảnh hưởng ngược lại logic phát lệnh, logic phát không hay biết về sự tồn tại của nó.
 	onRepeat func(agent, task string, n int)
 }
 
-// repeatNotifyAt 写死不进配置：它不是控制流阈值（不触发任何动作，只是"喊人"），
-// 调它没有收益；进配置反而暗示可调出行为差异。
+// repeatNotifyAt cố định không đưa vào cấu hình: đây không phải ngưỡng luồng điều khiển (không kích hoạt hành động nào, chỉ là "gọi người"),
+// điều chỉnh không mang lại lợi ích; đưa vào cấu hình lại ngầm ám chỉ có thể chỉnh ra hành vi khác.
 const repeatNotifyAt = 3
 
-// NewDispatcher 创建 Dispatcher。使用前需调用 Attach 订阅事件。
+// NewDispatcher tạo Dispatcher. Cần gọi Attach để đăng ký sự kiện trước khi sử dụng.
 func NewDispatcher(coordinator *agentcore.Agent, store *storepkg.Store) *Dispatcher {
 	d := &Dispatcher{coordinator: coordinator, store: store}
 	return d
 }
 
-// Enable 打开路由派发；关闭时 EventToolExecEnd 到达不会发 FollowUp。
-// Host 在 Start/Resume 完成首条 prompt 之后启用，避免与启动流程冲突。
+// Enable bật phát lệnh theo tuyến đường; khi tắt, EventToolExecEnd đến sẽ không gửi FollowUp.
+// Host bật sau khi hoàn thành prompt đầu tiên trong Start/Resume, tránh xung đột với luồng khởi động.
 func (d *Dispatcher) Enable() { d.enabled.Store(true) }
 
-// Attach 订阅 Coordinator 事件；返回的函数在关闭时调用以解绑。
+// Attach đăng ký lắng nghe sự kiện Coordinator; hàm trả về dùng để hủy đăng ký khi đóng.
 func (d *Dispatcher) Attach() func() {
 	return d.coordinator.Subscribe(d.handle)
 }
@@ -58,12 +58,12 @@ func (d *Dispatcher) handle(ev agentcore.Event) {
 	if !d.enabled.Load() {
 		return
 	}
-	// 精确触发点：子代理成功返回，或 reopen_book 把完结的书重开进返工态。
-	// 两者都推进了事实层、需要紧跟一次 Route 计算下一步——reopen_book 不是 subagent
-	// （complete 期要绕过 completePhaseGate），若不在此触发，重开后的返工队列就没有派发者。
-	// 不用 EventModelResponse，因为 agentcore 每次 LLM call 完成都会 emit 它，
-	// 会把同一条指令重复压进 followUpQ；查询类 Steer 由 coordinator.md 约束在
-	// 同一 turn 内继续调 subagent，从而命中这个触发点。
+	// Điểm kích hoạt chính xác: agent phụ trả về thành công, hoặc reopen_book mở lại sách đã hoàn thành vào trạng thái làm lại.
+	// Cả hai đều đã tiến lớp thực tế, cần ngay một lần tính Route để xác định bước tiếp theo — reopen_book không phải subagent
+	// (pha complete cần vượt qua completePhaseGate), nếu không kích hoạt ở đây, hàng đợi làm lại sau khi mở lại sẽ không có dispatcher.
+	// Không dùng EventModelResponse vì agentcore emit nó mỗi lần LLM call hoàn thành,
+	// sẽ ép cùng một lệnh vào followUpQ nhiều lần; Steer kiểu truy vấn bị coordinator.md ràng buộc tiếp tục gọi subagent
+	// trong cùng một turn, từ đó chạm điểm kích hoạt này.
 	if ev.Type != agentcore.EventToolExecEnd || ev.IsError {
 		return
 	}
@@ -73,7 +73,7 @@ func (d *Dispatcher) handle(ev agentcore.Event) {
 	d.Dispatch()
 }
 
-// Dispatch 立即计算路由并下达指令；可被 Host 在特殊时机（如 Resume 后）主动调用。
+// Dispatch tính toán tuyến đường ngay lập tức và gửi lệnh; Host có thể chủ động gọi vào thời điểm đặc biệt (ví dụ sau Resume).
 func (d *Dispatcher) Dispatch() {
 	state := LoadState(d.store)
 	inst := Route(state)
@@ -81,8 +81,8 @@ func (d *Dispatcher) Dispatch() {
 		return
 	}
 	n := d.trackRepeat(inst)
-	// Writer 任务：在派发同一刻把章节标为进行中，UI 右侧大纲立即反映"▸ 进行中"，
-	// 不用等 plan_chapter 真正执行（plan_chapter 会再调一次 StartChapter，幂等）。
+	// Tác vụ Người viết: đánh dấu chương là đang tiến hành ngay lúc phát lệnh, đề cương bên phải TUI phản ánh ngay "▸ đang tiến hành",
+	// không cần chờ plan_chapter thực sự thực thi (plan_chapter sẽ gọi StartChapter lần nữa, idempotent).
 	if inst.Agent == "writer" && inst.Chapter > 0 && d.store != nil {
 		if err := d.store.Progress.ValidateChapterWork(inst.Chapter); err != nil {
 			slog.Error("flow router refuses invalid writer dispatch", "module", "host.flow", "chapter", inst.Chapter, "err", err)
@@ -97,25 +97,25 @@ func (d *Dispatcher) Dispatch() {
 	d.coordinator.FollowUp(agentcore.UserMsg(msg))
 }
 
-// formatDispatchMessage 组装下达给 Coordinator 的指令消息。
-// n>1 时附加重复事实——告知"上次派发后路由事实未变化"并放开核对许可，
-// 让 LLM 自己裁定照常执行还是改派；不在 Host 层做任何强制分支。
+// formatDispatchMessage tạo nội dung lệnh gửi đến Coordinator.
+// Khi n>1, kèm thêm sự thật về việc lặp — thông báo "sau lần phát trước, sự thật route chưa thay đổi" và mở quyền kiểm tra,
+// để LLM tự phán quyết tiếp tục thực hiện hay chuyển sang agent phụ khác; Host không áp đặt bất kỳ nhánh bắt buộc nào.
 func formatDispatchMessage(inst *Instruction, n int) string {
 	msg := FormatMessage(inst)
 	if n > 1 {
-		msg += fmt.Sprintf("\n（注意：本指令为第 %d 次下达——上次派发后路由事实未变化。本次允许先调 novel_context 核对事实，再裁定照常执行或改派其它子代理。）", n)
+		msg += fmt.Sprintf("\n（Lưu ý: Đây là lần thứ %d lệnh này được phát — sau lần phát trước, sự thật route chưa thay đổi. Lần này được phép gọi novel_context kiểm tra sự thật trước, rồi phán quyết tiếp tục thực hiện hoặc chuyển sang agent phụ khác.）", n)
 	}
 	return msg
 }
 
-// SetOnRepeat 注册重复指令的 telemetry 回调。须在 Attach/派发开始前调用一次。
+// SetOnRepeat đăng ký callback telemetry cho lệnh lặp. Phải gọi một lần trước khi Attach/bắt đầu phát lệnh.
 func (d *Dispatcher) SetOnRepeat(cb func(agent, task string, n int)) {
 	d.onRepeat = cb
 }
 
-// trackRepeat 记录连续相同指令的下达次数并返回当前次数（1 = 新指令）。
-// 用 Agent+Task 相等性（不比 Reason，因为 Reason 是给人看的辅助文本）。
-// 次数恰好到 repeatNotifyAt 时在锁外触发一次 onRepeat（键变更重计数后重新武装）。
+// trackRepeat ghi lại số lần phát liên tiếp cùng một lệnh và trả về số lần hiện tại (1 = lệnh mới).
+// Dùng đẳng thức Agent+Task (không so Reason vì Reason là văn bản phụ trợ cho người đọc).
+// Khi số lần đúng bằng repeatNotifyAt, kích hoạt onRepeat một lần ngoài lock (sau khi khóa thay đổi thì đặt lại bộ đếm).
 func (d *Dispatcher) trackRepeat(next *Instruction) int {
 	d.lastMu.Lock()
 	if d.lastSent != nil && d.lastSent.Agent == next.Agent && d.lastSent.Task == next.Task {
@@ -134,8 +134,8 @@ func (d *Dispatcher) trackRepeat(next *Instruction) int {
 	return n
 }
 
-// ResetRepeat 清空重复追踪。Resume / 新 Start 时 Host 调用，
-// 确保恢复或新建后首条指令以"第 1 次"语义下达。
+// ResetRepeat xóa theo dõi lặp. Host gọi khi Resume / Start mới,
+// đảm bảo lệnh đầu tiên sau khi khôi phục hoặc tạo mới được phát với ngữ nghĩa "lần thứ 1".
 func (d *Dispatcher) ResetRepeat() {
 	d.lastMu.Lock()
 	defer d.lastMu.Unlock()
