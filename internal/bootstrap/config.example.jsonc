@@ -90,6 +90,30 @@
   //   "hard_stop": false
   // },
 
+  // Tùy chọn. Tích hợp nghiên cứu d-research: tìm kiếm web, duyệt trình duyệt, thu thập bằng chứng.
+  // Khi bật, Kiến trúc sư có thể gọi research_brief trước khi lập kế hoạch để lấy thông tin thực tế
+  // cho các câu chuyện cần căn cứ khoa học/kỹ thuật/lịch sử.
+  // "research": {
+  //   "enabled": true,
+  //   "plugin": "d-research",
+  //   // Tùy chọn. Đường dẫn tường minh đến plugin d-research. Nếu bỏ qua, hệ thống tự động dò tìm:
+  //   //   1. plugins/d-research/ (trong thư mục dự án)
+  //   //   2. ~/.codex/skills/d-research
+  //   //   3. ~/.agents/skills/d-research
+  //   // "plugin_path": "C:/Users/username/.codex/skills/d-research",
+  //   "auto": true,
+  //   "max_queries": 8,
+  //   "max_results_per_query": 6,
+  //   "max_sources": 12,
+  //   "timeout_seconds": 120,
+  //   "browser": {
+  //     "enabled": true,
+  //     "headless": true,
+  //     "timeout_seconds": 30,
+  //     "extract": true
+  //   }
+  // },
+
   // Tùy chọn. Thông báo khi chạy không giám sát, mặc định bật (thông báo desktop qua osascript trên macOS / notify-send trên Linux).
   // Khi cấu hình command sẽ chuyển sang dùng lệnh tùy chỉnh (thông báo điện thoại dùng mục này):
   // các trường được truyền qua biến môi trường $NOTIFY_TITLE / $NOTIFY_BODY / $NOTIFY_KIND / $NOTIFY_LEVEL,

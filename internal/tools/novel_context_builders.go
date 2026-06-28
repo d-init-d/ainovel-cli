@@ -359,6 +359,7 @@ func (t *ContextTool) buildChapterContext(result map[string]any, state contextBu
 	t.buildChapterSelectedMemory(&envelope, state, warn)
 	t.buildStyleStats(&envelope, state)
 	envelope.apply(result)
+	t.buildResearchPack(result, warn, "working_memory", "reference_pack")
 }
 
 // buildStyleStats thống kê phong cách toàn tập ở tất cả các chương đã hoàn thành,
@@ -592,6 +593,7 @@ func (t *ContextTool) buildArchitectContext(result map[string]any, warn func(str
 	t.buildArchitectFoundation(&envelope, warn)
 	t.buildArchitectReferences(&envelope, warn)
 	envelope.apply(result)
+	t.buildResearchPack(result, warn, "planning_memory", "reference_pack")
 }
 
 func (t *ContextTool) buildArchitectPlanning(envelope *architectContextEnvelope, warn func(string, error)) {
@@ -704,6 +706,27 @@ func (t *ContextTool) buildArchitectFoundation(envelope *architectContextEnvelop
 		warn("foreshadow_ledger", err)
 	}
 	envelope.Foundation["foundation_status"] = t.foundationStatus()
+}
+
+// buildResearchPack loads the latest compact research report into context.
+func (t *ContextTool) buildResearchPack(result map[string]any, warn func(string, error), sectionKeys ...string) {
+	var compact map[string]any
+	if err := t.store.Research.LoadLatestCompactReport(&compact); err != nil {
+		warn("research_pack", err)
+		return
+	}
+	if compact == nil {
+		return
+	}
+	result["research_pack"] = compact
+	for _, key := range sectionKeys {
+		section, ok := result[key].(map[string]any)
+		if !ok {
+			section = map[string]any{}
+			result[key] = section
+		}
+		section["research_pack"] = compact
+	}
 }
 
 func (t *ContextTool) buildArchitectReferences(envelope *architectContextEnvelope, warn func(string, error)) {

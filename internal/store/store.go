@@ -27,6 +27,7 @@ type Store struct {
 	Sessions    *SessionStore
 	Usage       *UsageStore
 	Simulation  *SimulationStore
+	Research    *ResearchStore
 
 	crossMu sync.Mutex // bảo vệ các thao tác nguyên tử liên miền
 }
@@ -52,6 +53,7 @@ func NewStore(dir string) *Store {
 		Sessions:    NewSessionStore(newIO(dir)),
 		Usage:       NewUsageStore(newIO(dir)),
 		Simulation:  NewSimulationStore(newIO(dir)),
+		Research:    NewResearchStore(newIO(dir)),
 	}
 }
 
@@ -126,7 +128,7 @@ func (s *Store) FoundationMissing() []string {
 // Init tạo cấu trúc thư mục con cần thiết.
 func (s *Store) Init() error {
 	return s.Progress.io.EnsureDirs([]string{
-		"chapters", "summaries", "drafts", "reviews", "meta", "meta/runtime", "meta/runtime/tasks", "meta/sessions", "meta/sessions/agents",
+		"chapters", "summaries", "drafts", "reviews", "meta", "meta/runtime", "meta/runtime/tasks", "meta/sessions", "meta/sessions/agents", "meta/research",
 	})
 }
 

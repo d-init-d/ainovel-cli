@@ -16,6 +16,7 @@ import (
 	"github.com/voocel/ainovel-cli/internal/bootstrap"
 	"github.com/voocel/ainovel-cli/internal/domain"
 	"github.com/voocel/ainovel-cli/internal/host/reminder"
+	"github.com/voocel/ainovel-cli/internal/research"
 	"github.com/voocel/ainovel-cli/internal/rules"
 	"github.com/voocel/ainovel-cli/internal/store"
 	"github.com/voocel/ainovel-cli/internal/tools"
@@ -118,6 +119,23 @@ func BuildCoordinator(
 	architectTools := []agentcore.Tool{
 		contextTool,
 		tools.NewSaveFoundationTool(store),
+	}
+
+	// Register d-research only for Architect agents and only when enabled.
+	if cfg.Research.IsEnabled() {
+		researchCfg := research.ConfigFromBootstrap(cfg)
+		plugin, warnings := research.ResolvePluginWithWarnings(researchCfg)
+		for _, w := range warnings {
+			slog.Warn("d-research plugin", "module", "agent", "warning", w)
+		}
+		if plugin != nil {
+			runner := research.NewRunner(researchCfg, plugin)
+			architectTools = append(architectTools, tools.NewResearchBriefTool(store, runner))
+		} else {
+			// Plugin not found but research enabled — register tool with nil runner
+			// so it returns a clear "not available" message
+			architectTools = append(architectTools, tools.NewResearchBriefTool(store, nil))
+		}
 	}
 	writerTools := []agentcore.Tool{
 		contextTool,

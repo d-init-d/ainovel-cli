@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "d-research",
+  "display_name": "D Research",
+  "version": "1.0.0",
+  "description": "Browser-first deep research and lawful public-data collection for AI agents",
+  "capabilities": [
+    "web_search",
+    "browser_probe",
+    "browser_extract",
+    "evidence_ledger",
+    "blocker_report"
+  ],
+  "scripts": {
+    "web_search": "scripts/web_search.mjs",
+    "browser_probe": "scripts/playwright_probe.mjs",
+    "browser_extract": "scripts/playwright_extract.mjs",
+    "browser_crawl": "scripts/playwright_crawl.mjs"
+  },
+  "requirements": {
+    "node": ">=18.0.0",
+    "playwright": "optional"
+  }
+}

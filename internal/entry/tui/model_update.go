@@ -286,7 +286,19 @@ func (m Model) handleEnterKey() (tea.Model, tea.Cmd) {
 		return m.handleSlashCommand(cmd)
 	}
 
-	m.pushInputHistory(text)
+	historyText := text
+	if len(m.attachments) > 0 {
+		prompt, err := buildPromptWithAttachments(text, m.attachments)
+		if err != nil {
+			m.applyEvent(host.Event{Time: time.Now(), Category: "ERROR", Summary: err.Error(), Level: "error"})
+			m.refreshEventViewport()
+			return m, nil
+		}
+		text = prompt
+		m.attachments = nil
+	}
+
+	m.pushInputHistory(historyText)
 	m.textarea.Reset()
 	m.refitTextareaHeight()
 	switch m.mode {

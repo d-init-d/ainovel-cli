@@ -475,6 +475,8 @@ func (h *Host) Done() <-chan struct{}       { return h.done }
 func (h *Host) Dir() string                 { return h.store.Dir() }
 func (h *Host) AskUser() *tools.AskUserTool { return h.askUser }
 
+func (h *Host) ResearchEnabled() bool { return h.cfg.Research.IsEnabled() }
+
 // ── Phát sự kiện ──
 
 func (h *Host) emitEvent(ev Event) {

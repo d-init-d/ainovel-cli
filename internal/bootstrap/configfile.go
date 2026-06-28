@@ -195,13 +195,27 @@ func mergeConfig(base, overlay Config) Config {
 		}
 	}
 
-	// Budget / Notify: ghi đè toàn bộ khối (ngân sách/cảnh báo cấp dự án là khai báo chính sách độc lập,
-	// không nối từng trường với toàn cục)
+	// Budget / Notify / Research are independent policy blocks; an overlay
+	// replaces the whole block instead of merging individual fields.
 	if overlay.Budget != (BudgetConfig{}) {
 		base.Budget = overlay.Budget
 	}
 	if overlay.Notify.Enabled != nil || overlay.Notify.Command != "" || len(overlay.Notify.Events) > 0 {
 		base.Notify = overlay.Notify
+	}
+	if overlay.Research.Enabled != nil ||
+		overlay.Research.Plugin != "" ||
+		overlay.Research.PluginPath != "" ||
+		overlay.Research.Auto != nil ||
+		overlay.Research.MaxQueries != 0 ||
+		overlay.Research.MaxResultsPerQuery != 0 ||
+		overlay.Research.MaxSources != 0 ||
+		overlay.Research.TimeoutSeconds != 0 ||
+		overlay.Research.Browser.Enabled != nil ||
+		overlay.Research.Browser.Headless != nil ||
+		overlay.Research.Browser.TimeoutSeconds != 0 ||
+		overlay.Research.Browser.Extract != nil {
+		base.Research = overlay.Research
 	}
 
 	return base

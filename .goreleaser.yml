@@ -37,6 +37,8 @@ archives:
     files:
       - README.md
       - LICENSE
+      - docs/d-research-plugin.md
+      - plugins/d-research/**/*
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_
       {{- title .Os }}_
@@ -70,5 +72,5 @@ changelog:
 
 release:
   github:
-    owner: voocel
+    owner: d-init-d
     name: ainovel-cli

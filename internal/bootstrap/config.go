@@ -142,6 +142,9 @@ type Config struct {
 	// Budget chính sách ngân sách chi phí cho một cuốn sách; chỉ kích hoạt khi book_usd > 0.
 	Budget BudgetConfig `json:"budget,omitzero"`
 
+	// Research configures the bundled d-research integration.
+	Research ResearchConfig `json:"research,omitzero"`
+
 	// Notify cấu hình cảnh báo không giám sát; mặc định bật (kênh system làm dự phòng).
 	Notify NotifyConfig `json:"notify,omitzero"`
 }
@@ -157,6 +160,35 @@ type BudgetConfig struct {
 
 // Enabled trả về liệu chính sách ngân sách có được bật hay không.
 func (b BudgetConfig) Enabled() bool { return b.BookUSD > 0 }
+
+// ResearchConfig configures the bundled d-research integration.
+type ResearchConfig struct {
+	Enabled            *bool                 `json:"enabled,omitempty"`
+	Plugin             string                `json:"plugin,omitempty"`
+	PluginPath         string                `json:"plugin_path,omitempty"`
+	Auto               *bool                 `json:"auto,omitempty"`
+	MaxQueries         int                   `json:"max_queries,omitempty"`
+	MaxResultsPerQuery int                   `json:"max_results_per_query,omitempty"`
+	MaxSources         int                   `json:"max_sources,omitempty"`
+	TimeoutSeconds     int                   `json:"timeout_seconds,omitempty"`
+	Browser            ResearchBrowserConfig `json:"browser,omitempty"`
+}
+
+// ResearchBrowserConfig configures browser-assisted research.
+type ResearchBrowserConfig struct {
+	Enabled        *bool `json:"enabled,omitempty"`
+	Headless       *bool `json:"headless,omitempty"`
+	TimeoutSeconds int   `json:"timeout_seconds,omitempty"`
+	Extract        *bool `json:"extract,omitempty"`
+}
+
+// IsEnabled returns whether research is enabled.
+// Research is intentionally opt-in: a missing enabled flag must not start
+// network/browser tooling implicitly.
+func (r ResearchConfig) IsEnabled() bool { return r.Enabled != nil && *r.Enabled }
+
+// IsAuto returns whether research-first prompting should be enabled.
+func (r ResearchConfig) IsAuto() bool { return r.Auto == nil || *r.Auto }
 
 // NotifyConfig cấu hình kênh cảnh báo không giám sát.
 type NotifyConfig struct {
@@ -251,6 +283,27 @@ func (c *Config) ValidateBase() error {
 		return fmt.Errorf("budget.warn_ratio must be in (0, 1): %w", errs.ErrConfig)
 	}
 
+	// Validate research configuration.
+	if c.Research.IsEnabled() {
+		if c.Research.MaxQueries < 0 {
+			return fmt.Errorf("research.max_queries must be >= 0: %w", errs.ErrConfig)
+		}
+		if c.Research.MaxResultsPerQuery < 0 {
+			return fmt.Errorf("research.max_results_per_query must be >= 0: %w", errs.ErrConfig)
+		}
+		if c.Research.MaxSources < 0 {
+			return fmt.Errorf("research.max_sources must be >= 0: %w", errs.ErrConfig)
+		}
+		if c.Research.TimeoutSeconds < 0 {
+			return fmt.Errorf("research.timeout_seconds must be >= 0: %w", errs.ErrConfig)
+		}
+		if c.Research.PluginPath != "" {
+			if err := validateConfigText("research.plugin_path", c.Research.PluginPath); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Kiểm tra cấu hình cảnh báo
 	if err := validateConfigText("notify.command", c.Notify.Command); err != nil {
 		return err
@@ -319,6 +372,26 @@ func (c *Config) FillDefaults() {
 	}
 	if c.Budget.Enabled() && c.Budget.WarnRatio == 0 {
 		c.Budget.WarnRatio = 0.8
+	}
+	if c.Research.IsEnabled() || c.Research.Plugin != "" || c.Research.PluginPath != "" {
+		if c.Research.MaxQueries == 0 {
+			c.Research.MaxQueries = 8
+		}
+		if c.Research.MaxResultsPerQuery == 0 {
+			c.Research.MaxResultsPerQuery = 6
+		}
+		if c.Research.MaxSources == 0 {
+			c.Research.MaxSources = 12
+		}
+		if c.Research.TimeoutSeconds == 0 {
+			c.Research.TimeoutSeconds = 120
+		}
+		if c.Research.Plugin == "" {
+			c.Research.Plugin = "d-research"
+		}
+		if c.Research.Browser.TimeoutSeconds == 0 {
+			c.Research.Browser.TimeoutSeconds = 30
+		}
 	}
 }
 

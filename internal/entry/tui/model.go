@@ -65,6 +65,7 @@ type Model struct {
 	importSeq      int
 	simulator      *simulationState
 	simSeq         int
+	attachments    []pendingAttachment
 	compItems      []commandPaletteItem
 	compIdx        int
 	compActive     bool

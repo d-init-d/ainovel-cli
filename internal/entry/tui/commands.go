@@ -1,10 +1,14 @@
 package tui
 
 import (
+	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/voocel/ainovel-cli/internal/entry/startup"
 	"github.com/voocel/ainovel-cli/internal/host"
 )
 
@@ -21,8 +25,9 @@ type slashCommandSpec struct {
 }
 
 type slashCommand struct {
-	name string
-	args []string
+	name    string
+	args    []string
+	rawArgs string
 }
 
 func parseSlashCommand(text string) (slashCommand, bool) {
@@ -30,11 +35,48 @@ func parseSlashCommand(text string) (slashCommand, bool) {
 	if !strings.HasPrefix(text, "/") {
 		return slashCommand{}, false
 	}
-	fields := strings.Fields(strings.TrimPrefix(text, "/"))
-	if len(fields) == 0 {
+	body := strings.TrimSpace(strings.TrimPrefix(text, "/"))
+	if body == "" {
 		return slashCommand{}, false
 	}
-	return slashCommand{name: strings.ToLower(fields[0]), args: fields[1:]}, true
+	separator := strings.IndexFunc(body, unicode.IsSpace)
+	if separator < 0 {
+		return slashCommand{name: strings.ToLower(body)}, true
+	}
+	name := body[:separator]
+	rawArgs := strings.TrimSpace(body[separator:])
+	return slashCommand{name: strings.ToLower(name), args: splitCommandArgs(rawArgs), rawArgs: rawArgs}, true
+}
+
+func splitCommandArgs(text string) []string {
+	var args []string
+	var b strings.Builder
+	var quote rune
+	flush := func() {
+		if b.Len() == 0 {
+			return
+		}
+		args = append(args, b.String())
+		b.Reset()
+	}
+	for _, r := range text {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+				continue
+			}
+			b.WriteRune(r)
+		case r == '"' || r == '\'':
+			quote = r
+		case r == ' ' || r == '\t' || r == '\n' || r == '\r':
+			flush()
+		default:
+			b.WriteRune(r)
+		}
+	}
+	flush()
+	return args
 }
 
 func (s slashCommandSpec) matches(name string) bool {
@@ -97,6 +139,118 @@ func commandRegistryInstance() commandRegistry {
 				m.report = newReportState(m.width, m.height, m.reportSeq, time.Now())
 				m.textarea.Blur()
 				return m, loadReport(m.runtime.Dir(), m.reportSeq)
+			},
+		},
+		{
+			Name:        "attach",
+			Group:       "system",
+			Usage:       "/attach <file.txt|file.md|file.docx> [file khác...]",
+			Description: "Đính kèm tài liệu tham khảo cho prompt kế tiếp",
+			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
+				queued, err := queueAttachments(m.attachments, args)
+				if err != nil {
+					m.applyEvent(host.Event{Time: time.Now(), Category: "ERROR", Summary: err.Error(), Level: "error"})
+					m.refreshEventViewport()
+					return m, nil
+				}
+				m.attachments = queued
+				m.applyEvent(host.Event{
+					Time: time.Now(), Category: "SYSTEM",
+					Summary: fmt.Sprintf("Đã đính kèm %d tài liệu cho prompt kế tiếp", len(m.attachments)), Level: "info",
+				})
+				m.refreshEventViewport()
+				return m, nil
+			},
+		},
+		{
+			Name:        "attachments",
+			Group:       "system",
+			Usage:       "/attachments",
+			Description: "Xem tài liệu đang chờ gửi cùng prompt kế tiếp",
+			AutoExecute: true,
+			Run: func(m Model, _ []string) (tea.Model, tea.Cmd) {
+				names := make([]string, 0, len(m.attachments))
+				for _, attachment := range m.attachments {
+					names = append(names, filepath.Base(attachment.Path))
+				}
+				summary := "Không có attachment đang chờ"
+				if len(names) > 0 {
+					summary = "Attachment đang chờ: " + strings.Join(names, ", ")
+				}
+				m.applyEvent(host.Event{Time: time.Now(), Category: "SYSTEM", Summary: summary, Level: "info"})
+				m.refreshEventViewport()
+				return m, nil
+			},
+		},
+		{
+			Name:        "detach",
+			Group:       "system",
+			Usage:       "/detach",
+			Description: "Bỏ toàn bộ tài liệu đang chờ",
+			AutoExecute: true,
+			Run: func(m Model, _ []string) (tea.Model, tea.Cmd) {
+				m.attachments = nil
+				m.applyEvent(host.Event{Time: time.Now(), Category: "SYSTEM", Summary: "Đã bỏ toàn bộ attachment đang chờ", Level: "info"})
+				m.refreshEventViewport()
+				return m, nil
+			},
+		},
+		{
+			Name:        "d-research",
+			Aliases:     []string{"research"},
+			Group:       "analysis",
+			Usage:       "/d-research <goal> [file=<path>] [url=<url>] [freshness=YYYY-MM-DD] [max=N]",
+			Description: "Yêu cầu Kiến trúc sư chạy nghiên cứu d-research và lưu research_pack",
+			Run: func(m Model, args []string) (tea.Model, tea.Cmd) {
+				if !m.runtime.ResearchEnabled() {
+					m.applyEvent(host.Event{
+						Time: time.Now(), Category: "ERROR", Summary: "d-research chưa bật trong config: đặt research.enabled=true rồi khởi động lại", Level: "error",
+					})
+					m.refreshEventViewport()
+					return m, nil
+				}
+				researchArgs := append([]string(nil), args...)
+				for _, attachment := range m.attachments {
+					researchArgs = append(researchArgs, "file="+attachment.Path)
+				}
+				prompt, err := buildDResearchCommandPrompt(researchArgs)
+				if err != nil {
+					m.applyEvent(host.Event{
+						Time: time.Now(), Category: "ERROR", Summary: err.Error(), Level: "error",
+					})
+					m.refreshEventViewport()
+					return m, nil
+				}
+				m.attachments = nil
+				switch m.mode {
+				case modeNew:
+					m.err = nil
+					if m.startupMode == startupModeQuick {
+						plan, err := startup.PrepareQuick(startup.Request{
+							Mode:        startup.ModeQuick,
+							UserPrompt:  prompt,
+							OutputDir:   m.runtime.Dir(),
+							Interactive: true,
+						})
+						if err != nil {
+							m.err = err
+							return m, nil
+						}
+						return m, startRuntime(m.runtime, plan)
+					}
+					m.cocreate = newCoCreateState(prompt)
+					return m, m.sendCoCreate()
+				case modeRunning:
+					if m.snapshot.IsRunning {
+						return m, steerRuntime(m.runtime, prompt)
+					}
+					return m, continueRuntime(m.runtime, prompt)
+				case modeDone:
+					m.mode = modeRunning
+					return m, continueRuntime(m.runtime, prompt)
+				default:
+					return m, nil
+				}
 			},
 		},
 		{
