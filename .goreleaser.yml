@@ -38,7 +38,12 @@ archives:
       - README.md
       - LICENSE
       - docs/d-research-plugin.md
-      - plugins/d-research/**/*
+      - plugins/d-research/LICENSE
+      - plugins/d-research/ainovel-plugin.json
+      - plugins/d-research/instructions.md
+      - plugins/d-research/package.json
+      - plugins/d-research/package-lock.json
+      - plugins/d-research/scripts/*.mjs
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_
       {{- title .Os }}_
